@@ -40,7 +40,8 @@ public enum DatabaseType {
 	MYSQL("MySQL"),
 	POSTGRES("PostgreSQL"),
 	SQLSERVER("Microsoft SQL Server"),
-	DB2("DB2");
+	DB2("DB2"),
+	SYBASE("Sybase");
 
 	private static final Map<String, DatabaseType> dbNameMap;
 
