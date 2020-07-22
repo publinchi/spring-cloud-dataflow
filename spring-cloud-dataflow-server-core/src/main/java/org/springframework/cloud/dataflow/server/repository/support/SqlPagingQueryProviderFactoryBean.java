@@ -57,6 +57,7 @@ public class SqlPagingQueryProviderFactoryBean implements FactoryBean<PagingQuer
 		providers.put(DatabaseType.ORACLE, new OraclePagingQueryProvider());
 		providers.put(DatabaseType.SQLSERVER, new SqlServerPagingQueryProvider());
 		providers.put(DatabaseType.DB2, new Db2PagingQueryProvider());
+		providers.put(DatabaseType.SYBASE, new SqlServerPagingQueryProvider());
 	}
 
 	/**
