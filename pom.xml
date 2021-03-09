@@ -142,7 +142,7 @@
 			<dependency>
 				<groupId>org.springframework.cloud</groupId>
 				<artifactId>spring-cloud-dataflow-dependencies</artifactId>
-				<version>2.5.4.RELEASE</version>
+				<version>2.5.4.1.RELEASE</version>
 				<type>pom</type>
 				<scope>import</scope>
 			</dependency>
