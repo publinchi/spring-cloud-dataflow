@@ -17,6 +17,7 @@
 package org.springframework.cloud.dataflow.completion;
 
 import java.util.HashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Set;
 
@@ -24,7 +25,6 @@ import org.springframework.boot.configurationmetadata.ConfigurationMetadataPrope
 import org.springframework.cloud.dataflow.core.ApplicationType;
 import org.springframework.cloud.dataflow.core.BindingPropertyKeys;
 import org.springframework.cloud.dataflow.core.StreamAppDefinition;
-import org.springframework.cloud.dataflow.core.StreamDefinition;
 import org.springframework.cloud.dataflow.core.TaskPropertyKeys;
 
 /**
@@ -100,11 +100,11 @@ public class CompletionUtils {
 	 * case.
 	 * </p>
 	 */
-	static String maybeQualifyWithLabel(String appName, StreamDefinition streamDefinition) {
+	static String maybeQualifyWithLabel(String appName, LinkedList<StreamAppDefinition> streamAppDefinitions) {
 		String candidate = appName;
 
 		Set<String> alreadyUsed = new HashSet<>();
-		for (StreamAppDefinition appDefinition : streamDefinition.getAppDefinitions()) {
+		for (StreamAppDefinition appDefinition : streamAppDefinitions) {
 			alreadyUsed.add(appDefinition.getName());
 		}
 
@@ -119,17 +119,17 @@ public class CompletionUtils {
 
 	/**
 	 * Return whether the given property name should be considered matching the candidate
-	 * configuration property, also taking into account the list of whitelist properties
+	 * configuration property, also taking into account the list of visible properties
 	 * (which are tested on their short name).
 	 */
 	static boolean isMatchingProperty(String propertyName, ConfigurationMetadataProperty property,
-			List<ConfigurationMetadataProperty> whiteListedProps) {
+			List<ConfigurationMetadataProperty> visibleProps) {
 		if (property.getId().equals(propertyName)) {
 			return true; // For any prop
-		} // Handle special case of short form for whitelist
+		} // Handle special case of short form for visible properties
 		else {
-			for (ConfigurationMetadataProperty white : whiteListedProps) {
-				if (property.getId().equals(white.getId())) { // prop#equals() not implemented
+			for (ConfigurationMetadataProperty visible : visibleProps) {
+				if (property.getId().equals(visible.getId())) { // prop#equals() not implemented
 					return property.getName().equals(propertyName);
 				}
 			}

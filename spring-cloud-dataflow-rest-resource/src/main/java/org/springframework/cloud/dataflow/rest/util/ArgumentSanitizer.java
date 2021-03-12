@@ -22,16 +22,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 import org.springframework.batch.core.JobParameter;
 import org.springframework.batch.core.JobParameters;
 import org.springframework.cloud.dataflow.core.DefinitionUtils;
-import org.springframework.cloud.dataflow.core.StreamAppDefinition;
-import org.springframework.cloud.dataflow.core.StreamDefinition;
-import org.springframework.cloud.dataflow.core.StreamDefinitionToDslConverter;
 import org.springframework.cloud.dataflow.core.TaskDefinition;
-import org.springframework.cloud.dataflow.core.TaskDefinitionToDslConverter;
 import org.springframework.cloud.dataflow.core.dsl.TaskParser;
 import org.springframework.cloud.dataflow.core.dsl.graph.Graph;
 import org.springframework.util.CollectionUtils;
@@ -54,10 +49,6 @@ public class ArgumentSanitizer {
 			"vcap_services", "url" };
 
 	private Pattern[] keysToSanitize;
-
-	private final StreamDefinitionToDslConverter streamDslConverter = new StreamDefinitionToDslConverter();
-
-	private final TaskDefinitionToDslConverter taskDslConverter = new TaskDefinitionToDslConverter();
 
 	public ArgumentSanitizer() {
 		this.keysToSanitize = new Pattern[KEYS_TO_SANITIZE.length];
@@ -139,32 +130,6 @@ public class ArgumentSanitizer {
 		});
 		return new JobParameters(newJobParameters);
 	}
-	/**
-	 * Redacts sensitive property values in a stream.
-	 *
-	 * @param streamDefinition the stream definition to sanitize
-	 * @return Stream definition text that has sensitive data redacted.
-	 */
-	public String sanitizeStream(StreamDefinition streamDefinition) {
-		List<StreamAppDefinition> sanitizedAppDefinitions = streamDefinition.getAppDefinitions().stream()
-				.map(app -> StreamAppDefinition.Builder
-						.from(app)
-						.setProperties(this.sanitizeProperties(app.getProperties()))
-						.build(streamDefinition.getName())
-				).collect(Collectors.toList());
-
-		return this.streamDslConverter.toDsl(sanitizedAppDefinitions);
-	}
-
-	/**
-	 * Redacts sensitive property values in a stream.
-	 *
-	 * @param streamDefinition the stream definition to sanitize
-	 * @return Stream definition with the original DSL text that has sensitive data redacted.
-	 */
-	public String sanitizeOriginalStreamDsl(StreamDefinition streamDefinition) {
-		return sanitizeStream(new StreamDefinition(streamDefinition.getName(), streamDefinition.getOriginalDslText()));
-	}
 
 	/**
 	 * Redacts sensitive property values in a task.
@@ -222,5 +187,4 @@ public class ArgumentSanitizer {
 		}
 		return arguments;
 	}
-
 }

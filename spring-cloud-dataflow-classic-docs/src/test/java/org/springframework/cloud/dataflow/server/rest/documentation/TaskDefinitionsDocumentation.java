@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 the original author or authors.
+ * Copyright 2017-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,6 +40,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Documentation for the /tasks/definitions endpoint.
  *
  * @author Eric Bottard
+ * @author Ilayaperumal Gopinathan
  */
 
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
@@ -77,6 +78,7 @@ public class TaskDefinitionsDocumentation extends BaseDocumentation {
 					fieldWithPath("lastTaskExecution")
 							.description("The last task execution of the created task definition"),
 					fieldWithPath("status").description("The status of the created task definition"),
+					fieldWithPath("composedTaskElement").description("specifies whether a definition is member of a composed task"),
 					subsectionWithPath("_links.self").description("Link to the created task definition resource")
 				)
 			));
@@ -90,6 +92,7 @@ public class TaskDefinitionsDocumentation extends BaseDocumentation {
 				.param("size", "10")
 				.param("sort", "taskName,ASC")
 				.param("search", "")
+				.param("manifest", "true")
 			)
 			.andDo(print())
 			.andExpect(status().isOk())
@@ -98,7 +101,8 @@ public class TaskDefinitionsDocumentation extends BaseDocumentation {
 					parameterWithName("page").description("The zero-based page number (optional)"),
 					parameterWithName("size").description("The requested page size (optional)"),
 					parameterWithName("search").description("The search string performed on the name (optional)"),
-					parameterWithName("sort").description("The sort on the list (optional)")
+					parameterWithName("sort").description("The sort on the list (optional)"),
+					parameterWithName("manifest").description("The flag to include the task manifest into the latest task execution (optional)")
 				),
 				responseFields(
 					subsectionWithPath("_embedded.taskDefinitionResourceList")
@@ -110,12 +114,16 @@ public class TaskDefinitionsDocumentation extends BaseDocumentation {
 	@Test
 	public void displayDetail() throws Exception {
 		this.mockMvc.perform(
-			get("/tasks/definitions/{my-task}","my-task"))
+			get("/tasks/definitions/{my-task}","my-task")
+			.param("manifest", "true"))
 			.andDo(print())
 			.andExpect(status().isOk())
 			.andDo(this.documentationHandler.document(
 				pathParameters(
 					parameterWithName("my-task").description("The name of an existing task definition (required)")
+				),
+				requestParameters(
+					parameterWithName("manifest").description("The flag to include the task manifest into the latest task execution (optional)")
 				),
 				responseFields(
 					fieldWithPath("name").description("The name of the created task definition"),
@@ -125,6 +133,7 @@ public class TaskDefinitionsDocumentation extends BaseDocumentation {
 					fieldWithPath("lastTaskExecution")
 						.description("The last task execution of the created task definition"),
 					fieldWithPath("status").description("The status of the created task definition"),
+					fieldWithPath("composedTaskElement").description("specifies whether a definition is member of a composed task"),
 					subsectionWithPath("_links.self").description("Link to the created task definition resource")
 				)
 			));
@@ -133,12 +142,15 @@ public class TaskDefinitionsDocumentation extends BaseDocumentation {
 	@Test
 	public void taskDefinitionDelete() throws Exception {
 		this.mockMvc.perform(
-			delete("/tasks/definitions/{my-task}", "my-task"))
+			delete("/tasks/definitions/{my-task}", "my-task")
+			.param("cleanup", "true"))
 			.andDo(print())
 			.andExpect(status().isOk())
 			.andDo(this.documentationHandler.document(
 				pathParameters(
-					parameterWithName("my-task").description("The name of an existing task definition (required)")
+					parameterWithName("my-task").description("The name of an existing task definition (required)")),
+				requestParameters(
+						parameterWithName("cleanup").description("The flag to indicate if the associated task executions needed to be cleaned up")
 				)
 			));
 	}

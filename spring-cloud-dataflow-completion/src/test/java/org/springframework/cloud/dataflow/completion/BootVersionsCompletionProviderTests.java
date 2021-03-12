@@ -1,5 +1,5 @@
 /*
- * Copyright 2019 the original author or authors.
+ * Copyright 2019-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,15 +24,19 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.cloud.dataflow.audit.service.DefaultAuditRecordService;
 import org.springframework.cloud.dataflow.configuration.metadata.ApplicationConfigurationMetadataResolver;
 import org.springframework.cloud.dataflow.configuration.metadata.BootApplicationConfigurationMetadataResolver;
+import org.springframework.cloud.dataflow.configuration.metadata.container.ContainerImageMetadataResolver;
 import org.springframework.cloud.dataflow.configuration.metadata.container.DefaultContainerImageMetadataResolver;
+import org.springframework.cloud.dataflow.container.registry.ContainerRegistryService;
 import org.springframework.cloud.dataflow.core.AppRegistration;
 import org.springframework.cloud.dataflow.core.ApplicationType;
+import org.springframework.cloud.dataflow.core.DefaultStreamDefinitionService;
+import org.springframework.cloud.dataflow.core.StreamDefinitionService;
 import org.springframework.cloud.dataflow.registry.repository.AppRegistrationRepository;
 import org.springframework.cloud.dataflow.registry.service.AppRegistryService;
 import org.springframework.cloud.dataflow.registry.service.DefaultAppRegistryService;
@@ -42,7 +46,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.FileSystemResourceLoader;
 import org.springframework.test.context.junit4.SpringRunner;
-import org.springframework.web.client.RestTemplate;
 
 import static org.hamcrest.CoreMatchers.hasItems;
 import static org.hamcrest.CoreMatchers.is;
@@ -114,13 +117,11 @@ public class BootVersionsCompletionProviderTests {
 		@MockBean
 		private DefaultContainerImageMetadataResolver containerImageMetadataResolver;
 
-		@MockBean
-		@Qualifier("containerRestTemplate")
-		private RestTemplate containerRestTemplate;
-
-		@MockBean
-		@Qualifier("noSslVerificationContainerRestTemplate")
-		private RestTemplate noSslVerificationContainerRestTemplate;
+		@Bean
+		@ConditionalOnMissingBean
+		public StreamDefinitionService streamDefinitionService() {
+			return new DefaultStreamDefinitionService();
+		}
 
 		@Bean
 		public AppRegistryService appRegistry() {
@@ -164,6 +165,14 @@ public class BootVersionsCompletionProviderTests {
 					return false;
 				}
 			};
+		}
+
+		@MockBean
+		ContainerRegistryService containerRegistryService;
+
+		@Bean
+		public ContainerImageMetadataResolver containerImageMetadataResolver(ContainerRegistryService containerRegistryService) {
+			return new DefaultContainerImageMetadataResolver(containerRegistryService);
 		}
 
 		@Bean

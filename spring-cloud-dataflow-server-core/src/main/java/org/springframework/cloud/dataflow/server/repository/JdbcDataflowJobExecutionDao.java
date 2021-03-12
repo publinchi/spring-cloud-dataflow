@@ -96,7 +96,7 @@ public class JdbcDataflowJobExecutionDao implements DataflowJobExecutionDao {
 	private static final String  SQL_DELETE_BATCH_JOB_INSTANCE =
 			"DELETE FROM %PREFIX%JOB_INSTANCE " +
 			"WHERE NOT EXISTS ( " +
-			"SELECT JOB_INSTANCE_ID FROM %PREFIX%JOB_EXECUTION BJE WHERE JOB_INSTANCE_ID = BJE.JOB_INSTANCE_ID)";
+			"SELECT JOB_INSTANCE_ID FROM %PREFIX%JOB_EXECUTION WHERE %PREFIX%JOB_INSTANCE.JOB_INSTANCE_ID = JOB_INSTANCE_ID)";
 
 	/**
 	 * Initializes the JdbcDataflowJobExecutionDao.

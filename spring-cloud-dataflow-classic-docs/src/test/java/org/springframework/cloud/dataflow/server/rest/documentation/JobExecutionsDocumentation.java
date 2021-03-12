@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 the original author or authors.
+ * Copyright 2017-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 package org.springframework.cloud.dataflow.server.rest.documentation;
 
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
@@ -31,9 +31,14 @@ import org.springframework.batch.core.JobParameter;
 import org.springframework.batch.core.JobParameters;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.repository.support.JobRepositoryFactoryBean;
+import org.springframework.batch.item.database.support.DataFieldMaxValueIncrementerFactory;
+import org.springframework.batch.item.database.support.DefaultDataFieldMaxValueIncrementerFactory;
 import org.springframework.boot.autoconfigure.jdbc.EmbeddedDataSourceConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.cloud.dataflow.core.ApplicationType;
+import org.springframework.cloud.dataflow.core.TaskManifest;
+import org.springframework.cloud.dataflow.server.repository.DataflowTaskExecutionMetadataDao;
+import org.springframework.cloud.dataflow.server.repository.JdbcDataflowTaskExecutionMetadataDao;
 import org.springframework.cloud.task.batch.listener.TaskBatchDao;
 import org.springframework.cloud.task.batch.listener.support.JdbcTaskBatchDao;
 import org.springframework.cloud.task.repository.TaskExecution;
@@ -82,7 +87,7 @@ public class JobExecutionsDocumentation extends BaseDocumentation {
 			registerApp(ApplicationType.task, "timestamp", "1.2.0.RELEASE");
 			initialize();
 			createJobExecution(JOB_NAME, BatchStatus.STARTED);
-			createJobExecution(JOB_NAME + "_1", BatchStatus.STOPPED);
+			createJobExecution(JOB_NAME + "1", BatchStatus.STOPPED);
 
 
 			jdbcTemplate = new JdbcTemplate(this.dataSource);
@@ -94,7 +99,7 @@ public class JobExecutionsDocumentation extends BaseDocumentation {
 
 			documentation.dontDocument(() -> this.mockMvc.perform(
 					post("/tasks/definitions")
-							.param("name", "DOCJOB_1")
+							.param("name", "DOCJOB1")
 							.param("definition", "timestamp --format='YYYY MM DD'"))
 					.andExpect(status().isOk()));
 
@@ -136,6 +141,81 @@ public class JobExecutionsDocumentation extends BaseDocumentation {
 								.description("The zero-based page number (optional)"),
 						parameterWithName("size")
 								.description("The requested page size (optional)")),
+				responseFields(
+						subsectionWithPath("_embedded.jobExecutionThinResourceList")
+								.description("Contains a collection of Job Executions without step executions included/"),
+						subsectionWithPath("_links.self").description("Link to the job execution resource"),
+						subsectionWithPath("page").description("Pagination properties")
+				)));
+	}
+
+	@Test
+	public void listThinJobExecutionsByJobInstanceId() throws Exception {
+		this.mockMvc.perform(
+				get("/jobs/thinexecutions")
+						.param("page", "0")
+						.param("size", "10")
+						.param("jobInstanceId", "1"))
+				.andDo(print())
+				.andExpect(status().isOk()).andDo(this.documentationHandler.document(
+				requestParameters(
+						parameterWithName("page")
+								.description("The zero-based page number (optional)"),
+						parameterWithName("size")
+								.description("The requested page size (optional)"),
+						parameterWithName("jobInstanceId")
+								.description("Filter result by the job instance id")),
+				responseFields(
+						subsectionWithPath("_embedded.jobExecutionThinResourceList")
+								.description("Contains a collection of Job Executions without step executions included/"),
+						subsectionWithPath("_links.self").description("Link to the job execution resource"),
+						subsectionWithPath("page").description("Pagination properties")
+				)));
+	}
+
+	@Test
+	public void listThinJobExecutionsByTaskExecutionId() throws Exception {
+		this.mockMvc.perform(
+				get("/jobs/thinexecutions")
+						.param("page", "0")
+						.param("size", "10")
+						.param("taskExecutionId", "1"))
+				.andDo(print())
+				.andExpect(status().isOk()).andDo(this.documentationHandler.document(
+				requestParameters(
+						parameterWithName("page")
+								.description("The zero-based page number (optional)"),
+						parameterWithName("size")
+								.description("The requested page size (optional)"),
+						parameterWithName("taskExecutionId")
+								.description("Filter result by the task execution id")),
+				responseFields(
+						subsectionWithPath("_embedded.jobExecutionThinResourceList")
+								.description("Contains a collection of Job Executions without step executions included/"),
+						subsectionWithPath("_links.self").description("Link to the job execution resource"),
+						subsectionWithPath("page").description("Pagination properties")
+				)));
+	}
+
+	@Test
+	public void listThinJobExecutionsByDate() throws Exception {
+		this.mockMvc.perform(
+				get("/jobs/thinexecutions")
+						.param("page", "0")
+						.param("size", "10")
+						.param("fromDate", "2000-09-24T17:00:45,000")
+						.param("toDate", "2050-09-24T18:00:45,000"))
+				.andDo(print())
+				.andExpect(status().isOk()).andDo(this.documentationHandler.document(
+				requestParameters(
+						parameterWithName("page")
+								.description("The zero-based page number (optional)"),
+						parameterWithName("size")
+								.description("The requested page size (optional)"),
+						parameterWithName("fromDate")
+								.description("Filter result from a starting date in the format 'yyyy-MM-dd'T'HH:mm:ss,SSS'"),
+						parameterWithName("toDate")
+								.description("Filter result up to the `to` date in the format 'yyyy-MM-dd'T'HH:mm:ss,SSS'")),
 				responseFields(
 						subsectionWithPath("_embedded.jobExecutionThinResourceList")
 								.description("Contains a collection of Job Executions without step executions included/"),
@@ -261,15 +341,23 @@ public class JobExecutionsDocumentation extends BaseDocumentation {
 	}
 
 	private void createJobExecution(String name, BatchStatus status) {
-		TaskExecution taskExecution = this.dao.createTaskExecution(name, new Date(), new ArrayList<>(), null);
+		TaskExecution taskExecution = this.dao.createTaskExecution(name, new Date(), Collections.singletonList("--spring.cloud.data.flow.platformname=default"), null);
 		Map<String, JobParameter> jobParameterMap = new HashMap<>();
-		jobParameterMap.put("-spring.cloud.data.flow.platformname", new JobParameter("default"));
 		JobParameters jobParameters = new JobParameters(jobParameterMap);
 		JobExecution jobExecution = this.jobRepository.createJobExecution(this.jobRepository.createJobInstance(name, new JobParameters()), jobParameters, null);
 		this.taskBatchDao.saveRelationship(taskExecution, jobExecution);
 		jobExecution.setStatus(status);
 		jobExecution.setStartTime(new Date());
 		this.jobRepository.update(jobExecution);
+		TaskManifest manifest = new TaskManifest();
+		manifest.setPlatformName("default");
+		DataFieldMaxValueIncrementerFactory incrementerFactory = new DefaultDataFieldMaxValueIncrementerFactory(dataSource);
+
+		DataflowTaskExecutionMetadataDao metadataDao = new JdbcDataflowTaskExecutionMetadataDao(
+				dataSource, incrementerFactory.getIncrementer("h2", "task_execution_metadata_seq"));
+		TaskManifest taskManifest = new TaskManifest();
+		taskManifest.setPlatformName("default");
+		metadataDao.save(taskExecution, taskManifest);
 	}
 
 }

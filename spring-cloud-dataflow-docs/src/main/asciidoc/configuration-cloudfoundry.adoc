@@ -49,8 +49,12 @@ These properties are also used when configuring the <<configuration-cloudfoundry
 |<none>
 
 |buildpack
-|The buildpack to use for deploying the application.
-|https://github.com/cloudfoundry/java-buildpack.git#v4.16.1
+|The buildpack to use for deploying the application. Deprecated use buildpacks.
+|https://github.com/cloudfoundry/java-buildpack.git#v4.29.1
+
+|buildpacks
+|The list of buildpacks to use for deploying the application.
+|https://github.com/cloudfoundry/java-buildpack.git#v4.29.1
 
 |memory
 |The amount of memory to allocate. Default unit is mebibytes, 'M' and 'G" suffixes supported
@@ -89,7 +93,7 @@ These properties are also used when configuring the <<configuration-cloudfoundry
 |5000
 
 |useSpringApplicationJson
-|Flag to indicate whether application properties are fed into SPRING_APPLICATION_JSON or as environment variables.
+|Flag to indicate whether application properties are fed into `SPRING_APPLICATION_JSON` or as separate environment variables.
 |true
 
 |stagingTimeout
@@ -120,6 +124,11 @@ These properties are also used when configuring the <<configuration-cloudfoundry
 |Whether to automatically delete Maven artifacts from the local repository when deployed.
 |true
 
+|env.<key>
+|Defines a top level environment variable. This is useful for customizing https://github.com/cloudfoundry/java-buildpack#configuration-and-extension[Java build pack configuration] which must be included as top level environment variables in the application manifest, as the Java build pack does not recognize `SPRING_APPLICATION_JSON`.
+
+|The deployer determines if the app has https://github.com/pivotal-cf/java-cfenv[Java CfEnv] in its classpath. If so, it applies the required https://github.com/pivotal-cf/java-cfenv#pushing-your-application-to-cloud-foundry[configuration].
+
 |===
 
 Here are some examples using the Cloud Foundry deployment properties:
@@ -130,9 +139,10 @@ set the following environment variable:
 
 [source,bash,subs=attributes]
 ----
-cf set-env dataflow-server SPRING_CLOUD_DATAFLOW_TASK_PLATFORM_CLOUDFOUNDRY_ACCOUNTS[default]_DEPLOYMENT_BUILDPACK java_buildpack_offline
+cf set-env dataflow-server SPRING_CLOUD_DATAFLOW_TASK_PLATFORM_CLOUDFOUNDRY_ACCOUNTS[default]_DEPLOYMENT_BUILDPACKS java_buildpack_offline
 ----
 
+* Setting `buildpack` is now deprecated in favour of `buildpacks` which allows you to pass on more than one if needed. More about this can be found from https://docs.cloudfoundry.org/buildpacks/understand-buildpacks.html[How Buildpacks Work].
 
 * You can customize the health check mechanism used by Cloud Foundry to assert whether apps are running by using the `SPRING_CLOUD_DATAFLOW_TASK_PLATFORM_CLOUDFOUNDRY_ACCOUNTS[default]_DEPLOYMENT_HEALTH_CHECK` environment variable. The current supported options
 are `http` (the default), `port`, and `none`.
@@ -222,6 +232,8 @@ When launching a task, pass the value of the platform account name using the tas
 NOTE: When deploying a task to multiple platforms, the configuration of the task needs to connect to the same database as the Data Flow Server.
 
 You can configure the Data Flow server that is on Cloud Foundry to deploy tasks to Cloud Foundry or Kubernetes.  See the section on <<configuration-kubernetes-tasks,Kubernetes Task Platform Configuration>> for more information.
+
+Detailed examples for launching and scheduling tasks across multiple platforms, are available in this section https://dataflow.spring.io/docs/recipes/multi-platform-deployment/[Multiple Platform Support for Tasks] on http://dataflow.spring.io.
 
 [[configuration-app-names-cloud-foundry]]
 === Application Names and Prefixes
@@ -682,7 +694,7 @@ SPRING_CLOUD_DATAFLOW_TASK_PLATFORM_CLOUDFOUNDRY_ACCOUNTS[default]_DEPLOYMENT_ST
 
 
 Note that you can set `spring.cloud.deployer.cloudfoundry.services`,
-`spring.cloud.deployer.cloudfoundry.buildpack`, or the Spring Cloud Deployer-standard
+`spring.cloud.deployer.cloudfoundry.buildpacks`, or the Spring Cloud Deployer-standard
 `spring.cloud.deployer.memory` and `spring.cloud.deployer.disk`
 as part of an individual deployment request by using the `deployer.<app-name>` shortcut, as the following example shows:
 
@@ -921,7 +933,7 @@ For scheduling, you must add (or update) the following environment variables in 
 
 * Enable scheduling for Spring Cloud Data Flow by setting `spring.cloud.dataflow.features.schedules-enabled` to `true`.
 * Bind the task deployer to your instance of PCF-Scheduler by adding the PCF-Scheduler service name to the `SPRING_CLOUD_DATAFLOW_TASK_PLATFORM_CLOUDFOUNDRY_ACCOUNTS[default]_DEPLOYMENT_SERVICES` environment variable.
-* Establish the URL to the PCF-Scheduler by setting the `SPRING_CLOUD_SCHEDULER_CLOUDFOUNDRY_SCHEDULER_URL` environment variable.
+* Establish the URL to the PCF-Scheduler by setting the `SPRING_CLOUD_DATAFLOW_TASK_PLATFORM_CLOUDFOUNDRY_ACCOUNTS[default]_SCHEDULER_SCHEDULER_URL` environment variable.
 
 [NOTE]
 ====
@@ -953,11 +965,12 @@ applications:
     SPRING_CLOUD_SKIPPER_SERVER_PLATFORM_CLOUDFOUNDRY_ACCOUNTS[default]_DEPLOYMENT_SERVICES: rabbit, myscheduler
     SPRING_CLOUD_DATAFLOW_FEATURES_SCHEDULES_ENABLED: true
     SPRING_CLOUD_SKIPPER_CLIENT_SERVER_URI: https://<skipper-host-name>/api
-    SPRING_CLOUD_SCHEDULER_CLOUDFOUNDRY_SCHEDULER_URL: https://scheduler.local.pcfdev.io
+    SPRING_CLOUD_DATAFLOW_TASK_PLATFORM_CLOUDFOUNDRY_ACCOUNTS[default]_SCHEDULER_SCHEDULER_URL: https://scheduler.local.pcfdev.io
 services:
 - mysql
 ----
 
-Where the `SPRING_CLOUD_SCHEDULER_CLOUDFOUNDRY_SCHEDULER_URL` has the following format: `scheduler.<Domain-Name>` (for
+Where the `SPRING_CLOUD_DATAFLOW_TASK_PLATFORM_CLOUDFOUNDRY_ACCOUNTS[default]_SCHEDULER_SCHEDULER_URL` has the following format: `scheduler.<Domain-Name>` (for
 example, `https://scheduler.local.pcfdev.io`). Check the actual address from your _PCF_ environment.
 
+NOTE: Detailed examples for launching and scheduling tasks across multiple platforms, are available in this section https://dataflow.spring.io/docs/recipes/multi-platform-deployment/[Multiple Platform Support for Tasks] on http://dataflow.spring.io.

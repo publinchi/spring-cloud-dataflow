@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2019 the original author or authors.
+ * Copyright 2016-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,10 +17,13 @@
 package org.springframework.cloud.dataflow.core;
 
 import java.net.URI;
+import java.util.HashSet;
+import java.util.Objects;
 
 import javax.persistence.Entity;
 import javax.persistence.Lob;
 import javax.persistence.Table;
+import javax.persistence.Transient;
 
 import org.springframework.util.Assert;
 
@@ -31,6 +34,7 @@ import org.springframework.util.Assert;
  * @author Mark Fisher
  * @author Christian Tzolov
  * @author Vinicius Carvalho
+ * @author Ilayaperumal Gopinathan
  */
 @Entity
 @Table(name = "AppRegistration")
@@ -69,6 +73,9 @@ public class AppRegistration extends AbstractEntity implements Comparable<AppReg
 	 * per (name, type) pair is allowed
 	 */
 	private Boolean defaultVersion = false;
+
+	@Transient
+	private HashSet<String> versions;
 
 	public AppRegistration() {
 	}
@@ -177,6 +184,14 @@ public class AppRegistration extends AbstractEntity implements Comparable<AppReg
 		this.defaultVersion = defaultVersion;
 	}
 
+	public HashSet<String> getVersions() {
+		return versions;
+	}
+
+	public void setVersions(HashSet<String> versions) {
+		this.versions = versions;
+	}
+
 	@Override
 	public String toString() {
 		return "AppRegistration{" + "name='" + this.getName() + '\'' + ", type='" + this.getType()
@@ -194,5 +209,28 @@ public class AppRegistration extends AbstractEntity implements Comparable<AppReg
 			i = this.getVersion().compareTo(that.getVersion());
 		}
 		return i;
+	}
+
+	@Override
+	public boolean equals(Object o) {
+		// self check
+		if (this == o)
+			return true;
+		// null check
+		if (o == null)
+			return false;
+		// type check and cast
+		if (getClass() != o.getClass())
+			return false;
+		AppRegistration appRegistration = (AppRegistration) o;
+		// field comparison
+		return this.getName().equals(appRegistration.getName())
+				&& this.getType().equals(appRegistration.getType());
+	}
+
+
+	@Override
+	public int hashCode() {
+		return Objects.hash(this.getName(), this.getType());
 	}
 }

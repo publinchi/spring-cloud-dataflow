@@ -33,6 +33,7 @@ import static org.junit.Assert.assertTrue;
 import static org.springframework.cloud.dataflow.server.single.security.SecurityTestUtils.basicAuthorizationHeader;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -80,7 +81,6 @@ public class LocalServerSecurityWithOAuth2Tests {
 				.andExpect(jsonPath("$._links.dashboard.href", is("http://localhost/dashboard")))
 				.andExpect(jsonPath("$._links.streams/definitions.href", is("http://localhost/streams/definitions")))
 				.andExpect(jsonPath("$._links.streams/definitions/definition.href", is("http://localhost/streams/definitions/{name}")))
-				.andExpect(jsonPath("$._links.streams/deployments.href", is("http://localhost/streams/deployments")))
 				.andExpect(jsonPath("$._links.streams/deployments/deployment.href", is("http://localhost/streams/deployments/{name}")))
 				.andExpect(jsonPath("$._links.runtime/apps.href", is("http://localhost/runtime/apps")))
 				.andExpect(jsonPath("$._links.runtime/apps/{appId}.href", is("http://localhost/runtime/apps/{appId}")))
@@ -286,4 +286,10 @@ public class LocalServerSecurityWithOAuth2Tests {
 				.andExpect(status().isUnauthorized());
 	}
 
+	@Test
+	public void testXMLHttpRequestReturnsNoWwwAuthenticateHeader() throws Exception {
+		localDataflowResource.getMockMvc().perform(get("/").header("X-Requested-With", "XMLHttpRequest")).andDo(print())
+				.andExpect(status().isUnauthorized())
+				.andExpect(header().doesNotExist("WWW-Authenticate"));
+	}
 }

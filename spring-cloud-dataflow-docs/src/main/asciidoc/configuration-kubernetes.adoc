@@ -217,6 +217,10 @@ These properties are also used when configuring the <<configuration-kubernetes-t
 |The toleration value to apply, used in conjunction with `operator` to select to appropriate `effect`.
 |<none>
 
+|secretRefs
+|The name of the secret(s) to load the entire data contents into individual environment variables. Multiple secrets may be comma separated.
+|<none>
+
 |secretKeyRefs.envVarName
 |The environment variable name to hold the secret data
 |<none>
@@ -227,6 +231,10 @@ These properties are also used when configuring the <<configuration-kubernetes-t
 
 |secretKeyRefs.dataKey
 |The key name to obtain secret data from
+|<none>
+
+|configMapRefs
+|The name of the ConfigMap(s) to load the entire data contents into individual environment variables. Multiple ConfigMaps be comma separated.
 |<none>
 
 |configMapKeyRefs.envVarName
@@ -317,24 +325,12 @@ NOTE: When deploying a task to multiple platforms, the configuration of the task
 
 You can configure the Data Flow server that is on Kubernetes to deploy tasks to Cloud Foundry and Kubernetes.  See the section on <<configuration-cloudfoundry-tasks,Cloud Foundry Task Platform Configuration>> for more information.
 
+Detailed examples for launching and scheduling tasks across multiple platforms, are available in this section https://dataflow.spring.io/docs/recipes/multi-platform-deployment/[Multiple Platform Support for Tasks] on http://dataflow.spring.io.
+
 [[configuration-kubernetes-general]]
 === General Configuration
 
-The Spring Cloud Data Flow server for Kubernetes uses the https://github.com/fabric8io/spring-cloud-kubernetes[`spring-cloud-kubernetes`] module process both the ConfigMap and the secrets settings. To enable the ConfigMap support, pass in an environment variable of `SPRING_CLOUD_KUBERNETES_CONFIG_NAME` and set it to the name of the ConfigMap. The same is true for the secrets, where the environment variable is `SPRING_CLOUD_KUBERNETES_SECRETS_NAME`. To use the secrets, you also need to set `SPRING_CLOUD_KUBERNETES_SECRETS_ENABLE_API` to `true`.
-
-The following example shows a snippet from a deployment script that sets these environment variables:
-
-
-[source,yaml]
-----
-env:
-- name: SPRING_CLOUD_KUBERNETES_SECRETS_ENABLE_API
-  value: 'true'
-- name: SPRING_CLOUD_KUBERNETES_SECRETS_NAME
-  value: mysql
-- name: SPRING_CLOUD_KUBERNETES_CONFIG_NAME
-  value: scdf-server
-----
+The Spring Cloud Data Flow server for Kubernetes uses the https://github.com/fabric8io/spring-cloud-kubernetes[`spring-cloud-kubernetes`] module to process secrets that are mounted under `/etc/secrets`. ConfigMaps must be mounted as `application.yaml` in the `/config` directory that is processed by Spring Boot. To avoid access to the Kubernetes API server the `SPRING_CLOUD_KUBERNETES_CONFIG_ENABLE_API` and `SPRING_CLOUD_KUBERNETES_SECRETS_ENABLE_API` are set to `false`.
 
 
 ==== Using ConfigMap and Secrets
@@ -372,7 +368,6 @@ data:
         testOnBorrow: true
         validationQuery: "SELECT 1"
 ----
-
 
 The preceding example assumes that MySQL is deployed with `mysql` as the service name. Kubernetes publishes the host and port values of these services as environment variables that we can use when configuring the apps we deploy.
 
@@ -449,6 +444,36 @@ data:
         username: sa
         driverClassName: org.hsqldb.jdbc.JDBCDriver
 ----
+
+The following YAML snippet from a Deployment is an example of mounting a ConfigMap as `application.yaml` under `/config` where Spring Boot will process it plus a Secret mounted under `/etc/secrets` where it will get picked up by the spring-cloud-kubernetes library due to the environment variable `SPRING_CLOUD_KUBERNETES_SECRETS_PATHS` being set to `/etc/secrets`.
+
+[source,yaml]
+----
+...
+      containers:
+      - name: scdf-server
+        image: springcloud/spring-cloud-dataflow-server:2.5.0.BUILD-SNAPSHOT
+        imagePullPolicy: Always
+        volumeMounts:
+          - name: config
+            mountPath: /config
+            readOnly: true
+          - name: database
+            mountPath: /etc/secrets/database
+            readOnly: true
+        ports:
+...
+      volumes:
+        - name: config
+          configMap:
+            name: scdf-server
+            items:
+            - key: application.yaml
+              path: application.yaml
+        - name: database
+          secret:
+            secretName: mysql
+---- 
 
 
 You can find migration scripts for specific database types in the https://github.com/spring-cloud/spring-cloud-task/tree/master/spring-cloud-task-core/src/main/resources/org/springframework/cloud/task/migration[spring-cloud-task] repo.
@@ -619,6 +644,40 @@ dataflow:>task execution cleanup --id 1
 Request to clean up resources for task execution 1 has been submitted
 ----
 
+===== Database Credentials for Tasks
+By default Spring Cloud Data Flow passes database credentials as properties to the pod at task launch time.
+If using the `exec`  or `shell` entry point styles the DB credentials will be viewable if the user does a `kubectl describe` on the task's pod.
+To configure Spring Cloud Data Flow to use Kubernetes Secrets:  Set `spring.cloud.dataflow.task.use.kubernetes.secrets.for.db.credentials` property to `true`. If using the yaml files provided by Spring Cloud Data Flow update the `src/kubernetes/server/server-deployment.yaml to add the following environment variable:
+[source,yaml]
+----
+- name: SPRING_CLOUD_DATAFLOW_TASK_USE_KUBERNETES_SECRETS_FOR_DB_CREDENTIALS
+  value: 'true'
+----
+
+If upgrading from a previous version of SCDF be sure to verify that `spring.datasource.username` and `spring.datasource.password` environment variables are present in the `secretKeyRefs` in the server-config.yaml.  If not, add it as shown in the example below:
+
+[source,yaml]
+----
+...
+  task:
+    platform:
+      kubernetes:
+        accounts:
+          default:
+            secretKeyRefs:
+              - envVarName: "spring.datasource.password"
+                secretName: mysql
+                dataKey: mysql-root-password
+              - envVarName: "spring.datasource.username"
+                  secretName: mysql
+                  dataKey: mysql-root-username
+...
+----
+
+Also verify that the associated secret(dataKey) is also available in secrets.  SCDF provides an example of this for MySql here: `src/kubernetes/mysql/mysql-svc.yaml`.
+
+
+NOTE: Passing of DB credentials via properties by default is to preserve to backwards compatibility.  This will be feature will be removed in future release.
 
 === Scheduling
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2019 the original author or authors.
+ * Copyright 2017-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
@@ -38,11 +39,10 @@ import org.springframework.cloud.dataflow.core.AuditOperationType;
 import org.springframework.cloud.dataflow.core.DataFlowPropertyKeys;
 import org.springframework.cloud.dataflow.core.StreamAppDefinition;
 import org.springframework.cloud.dataflow.core.StreamDefinition;
-import org.springframework.cloud.dataflow.core.StreamDefinitionToDslConverter;
+import org.springframework.cloud.dataflow.core.StreamDefinitionService;
 import org.springframework.cloud.dataflow.core.StreamDeployment;
 import org.springframework.cloud.dataflow.core.dsl.ParseException;
 import org.springframework.cloud.dataflow.core.dsl.StreamNode;
-import org.springframework.cloud.dataflow.core.dsl.StreamParser;
 import org.springframework.cloud.dataflow.rest.SkipperStream;
 import org.springframework.cloud.dataflow.rest.UpdateStreamRequest;
 import org.springframework.cloud.dataflow.rest.util.DeploymentPropertiesUtils;
@@ -83,6 +83,7 @@ import org.springframework.util.StringUtils;
  * @author Ilayaperumal Gopinathan
  * @author Christian Tzolov
  * @author Gunnar Hillert
+ * @author Chris Schaefer
  */
 @Transactional
 public class DefaultStreamService implements StreamService {
@@ -90,6 +91,11 @@ public class DefaultStreamService implements StreamService {
 	public static final String DEFAULT_SKIPPER_PACKAGE_VERSION = "1.0.0";
 
 	private static final Logger logger = LoggerFactory.getLogger(DefaultStreamService.class);
+
+	private static final Pattern STREAM_NAME_PATTERN = Pattern.compile("[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?");
+	private static final String STREAM_NAME_VALIDATION_MSG = "Stream name must consist of alphanumeric characters " +
+			"or '-', start with an alphabetic character, and end with an alphanumeric character (e.g. 'my-name', " +
+			"or 'abc-123')";
 
 	/**
 	 * The repository this controller will use for stream CRUD operations.
@@ -109,17 +115,21 @@ public class DefaultStreamService implements StreamService {
 
 	private final AppDeploymentRequestCreator appDeploymentRequestCreator;
 
+	private final StreamDefinitionService streamDefinitionService;
+
 	public DefaultStreamService(StreamDefinitionRepository streamDefinitionRepository,
 			SkipperStreamDeployer skipperStreamDeployer,
 			AppDeploymentRequestCreator appDeploymentRequestCreator,
 			StreamValidationService streamValidationService,
-			AuditRecordService auditRecordService) {
+			AuditRecordService auditRecordService,
+			StreamDefinitionService streamDefinitionService) {
 
 		Assert.notNull(skipperStreamDeployer, "SkipperStreamDeployer must not be null");
 		Assert.notNull(appDeploymentRequestCreator, "AppDeploymentRequestCreator must not be null");
 		Assert.notNull(streamDefinitionRepository, "StreamDefinitionRepository must not be null");
 		Assert.notNull(streamValidationService, "StreamValidationService must not be null");
 		Assert.notNull(auditRecordService, "AuditRecordService must not be null");
+		Assert.notNull(streamDefinitionService, "StreamDefinitionService must not be null");
 
 		this.skipperStreamDeployer = skipperStreamDeployer;
 		this.appDeploymentRequestCreator = appDeploymentRequestCreator;
@@ -127,6 +137,7 @@ public class DefaultStreamService implements StreamService {
 		this.streamValidationService = streamValidationService;
 		this.auditRecordService = auditRecordService;
 		this.auditServiceUtils = new AuditServiceUtils();
+		this.streamDefinitionService = streamDefinitionService;
 
 	}
 
@@ -150,8 +161,15 @@ public class DefaultStreamService implements StreamService {
 				.filter(mapEntry -> !mapEntry.getKey().startsWith(SkipperStream.SKIPPER_KEY_PREFIX))
 				.collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
+		final String platformName = skipperDeploymentProperties.getOrDefault(SkipperStream.SKIPPER_PLATFORM_NAME, "default");
+		String platformType = this.platformList().stream()
+				.filter(deployer -> deployer.getName().equalsIgnoreCase(platformName))
+				.map(Deployer::getType)
+				.findFirst()
+				.orElse("unknown");
+
 		List<AppDeploymentRequest> appDeploymentRequests = this.appDeploymentRequestCreator
-				.createRequests(streamDefinition, deploymentPropertiesToUse);
+				.createRequests(streamDefinition, deploymentPropertiesToUse, platformType);
 
 		DeploymentPropertiesUtils.validateSkipperDeploymentProperties(deploymentPropertiesToUse);
 
@@ -182,8 +200,7 @@ public class DefaultStreamService implements StreamService {
 
 		auditRecordService.populateAndSaveAuditRecord(
 				AuditOperationType.STREAM, AuditActionType.UNDEPLOY,
-				streamDefinition.getName(), this.auditServiceUtils.convertStreamDefinitionToAuditData(streamDefinition),
-				null);
+				streamDefinition.getName(), this.streamDefinitionService.redactDsl(streamDefinition), null);
 	}
 
 	private void updateStreamDefinitionFromReleaseManifest(String streamName, String releaseManifest) {
@@ -202,7 +219,7 @@ public class DefaultStreamService implements StreamService {
 				.orElseThrow(() -> new NoSuchStreamDefinitionException(streamName));
 
 		LinkedList<StreamAppDefinition> updatedStreamAppDefinitions = new LinkedList<>();
-		for (StreamAppDefinition appDefinition : streamDefinition.getAppDefinitions()) {
+		for (StreamAppDefinition appDefinition : this.streamDefinitionService.getAppDefinitions(streamDefinition)) {
 			StreamAppDefinition.Builder appDefinitionBuilder = StreamAppDefinition.Builder.from(appDefinition);
 			SpringCloudDeployerApplicationManifest applicationManifest = appManifestMap.get(appDefinition.getName());
 			// overrides app definition properties with those from the release manifest
@@ -210,9 +227,8 @@ public class DefaultStreamService implements StreamService {
 			updatedStreamAppDefinitions.addLast(appDefinitionBuilder.build(streamDefinition.getName()));
 		}
 
-		String updatedDslText = new StreamDefinitionToDslConverter().toDsl(updatedStreamAppDefinitions);
-
-		StreamDefinition updatedStreamDefinition = new StreamDefinition(streamName, updatedDslText,
+		StreamDefinition updatedStreamDefinition = new StreamDefinition(streamName,
+				this.streamDefinitionService.constructDsl(streamDefinition.getDslText(), updatedStreamAppDefinitions),
 				streamDefinition.getOriginalDslText(), streamDefinition.getDescription());
 		logger.debug("Updated StreamDefinition: " + updatedStreamDefinition);
 
@@ -222,7 +238,7 @@ public class DefaultStreamService implements StreamService {
 		this.streamDefinitionRepository.save(updatedStreamDefinition);
 		this.auditRecordService.populateAndSaveAuditRecord(
 				AuditOperationType.STREAM, AuditActionType.UPDATE, streamName,
-				this.auditServiceUtils.convertStreamDefinitionToAuditData(streamDefinition), null);
+				updatedStreamDefinition.getDslText(), null);
 	}
 
 	@Override
@@ -383,7 +399,7 @@ public class DefaultStreamService implements StreamService {
 		StreamDefinition streamDefinition = createStreamDefinition(streamName, dsl, description);
 		List<String> errorMessages = new ArrayList<>();
 
-		for (StreamAppDefinition streamAppDefinition : streamDefinition.getAppDefinitions()) {
+		for (StreamAppDefinition streamAppDefinition : this.streamDefinitionService.getAppDefinitions(streamDefinition)) {
 			final String appName = streamAppDefinition.getRegisteredAppName();
 			ApplicationType applicationType = streamAppDefinition.getApplicationType();
 			if (!streamValidationService.isRegistered(appName, applicationType)) {
@@ -391,6 +407,10 @@ public class DefaultStreamService implements StreamService {
 						String.format("Application name '%s' with type '%s' does not exist in the app registry.",
 								appName, applicationType));
 			}
+		}
+
+		if (!STREAM_NAME_PATTERN.matcher(streamName).matches()) {
+			errorMessages.add(STREAM_NAME_VALIDATION_MSG);
 		}
 
 		if (!errorMessages.isEmpty()) {
@@ -411,7 +431,7 @@ public class DefaultStreamService implements StreamService {
 
 		auditRecordService.populateAndSaveAuditRecord(
 				AuditOperationType.STREAM, AuditActionType.CREATE, streamDefinition.getName(),
-				this.auditServiceUtils.convertStreamDefinitionToAuditData(savedStreamDefinition), null);
+				this.streamDefinitionService.redactDsl(streamDefinition), null);
 
 		return streamDefinition;
 
@@ -419,7 +439,9 @@ public class DefaultStreamService implements StreamService {
 
 	public StreamDefinition createStreamDefinition(String streamName, String dsl, String description) {
 		try {
-			return new StreamDefinition(streamName, dsl, dsl, description);
+			StreamDefinition streamDefinition = new StreamDefinition(streamName, dsl, dsl, description);
+			this.streamDefinitionService.parse(streamDefinition);
+			return streamDefinition;
 		}
 		catch (ParseException ex) {
 			throw new InvalidStreamDefinitionException(ex.getMessage());
@@ -453,7 +475,8 @@ public class DefaultStreamService implements StreamService {
 		auditRecordService.populateAndSaveAuditRecordUsingMapData(
 				AuditOperationType.STREAM, AuditActionType.DEPLOY,
 				streamDefinition.getName(),
-				this.auditServiceUtils.convertStreamDefinitionToAuditData(streamDefinition, deploymentProperties),
+				this.auditServiceUtils.convertStreamDefinitionToAuditData(
+						this.streamDefinitionService.redactDsl(streamDefinition), deploymentProperties),
 				platformName);
 	}
 
@@ -470,7 +493,7 @@ public class DefaultStreamService implements StreamService {
 		auditRecordService.populateAndSaveAuditRecord(
 				AuditOperationType.STREAM, AuditActionType.DELETE,
 				streamDefinition.getName(),
-				this.auditServiceUtils.convertStreamDefinitionToAuditData(streamDefinition), null);
+				this.streamDefinitionService.redactDsl(streamDefinition), null);
 	}
 
 	/**
@@ -487,7 +510,7 @@ public class DefaultStreamService implements StreamService {
 			auditRecordService.populateAndSaveAuditRecord(
 					AuditOperationType.STREAM, AuditActionType.DELETE,
 					streamDefinition.getName(),
-					this.auditServiceUtils.convertStreamDefinitionToAuditData(streamDefinition), null);
+					this.streamDefinitionService.redactDsl(streamDefinition), null);
 		}
 	}
 
@@ -516,7 +539,7 @@ public class DefaultStreamService implements StreamService {
 		String currentStreamName = currentStreamDefinition.getName();
 		String indexedStreamName = currentStreamName + ".";
 		for (StreamDefinition definition : definitions) {
-			StreamNode sn = new StreamParser(definition.getName(), definition.getDslText()).parse();
+			StreamNode sn = this.streamDefinitionService.parse(definition);
 			if (sn.getSourceDestinationNode() != null) {
 				String nameComponent = sn.getSourceDestinationNode().getDestinationName();
 				if (nameComponent.equals(currentStreamName) || nameComponent.startsWith(indexedStreamName)) {

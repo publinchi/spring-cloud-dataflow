@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2019 the original author or authors.
+ * Copyright 2017-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -910,7 +910,7 @@ public class TaskParserTests {
 		assertEquals("aaa", taskApp.getLabelString());
 
 		checkForParseError("aaa: (appA)", DSLMessage.TASK_NO_LABELS_ON_PARENS, 5);
-		checkForParseError("aaa: bbb: appA", DSLMessage.TASK_NO_DOUBLE_LABELS, 5);
+		checkForParseError("aaa: bbb: appA", DSLMessage.NO_DOUBLE_LABELS, 5);
 		checkForParseError("aaa: >", DSLMessage.EXPECTED_APPNAME, 5);
 		checkForParseError("aaa: &&", DSLMessage.EXPECTED_APPNAME, 5);
 		checkForParseError("aaa:: appA", DSLMessage.EXPECTED_APPNAME, 4);
@@ -938,6 +938,32 @@ public class TaskParserTests {
 		graph.links.get(0).properties = new HashMap<>();
 		graph.links.get(1).properties = new HashMap<>();
 		assertEquals("timestamp", graph.toDSLText());
+	}
+	
+	@Test
+	public void graphToText_3667() {
+		assertGraph("[0:START][1:sql-executor-task:password=password:url=jdbc:postgresql://127.0.0.1:5432/postgres:script-location=/dataflow/scripts/test.sql:username=postgres]"+
+					"[2:END][0-1][1-2]","sql-executor-task --script-location=/dataflow/scripts/test.sql --username=postgres --password=password --url=jdbc:postgresql://127.0.0.1:5432/postgres");
+		
+		assertGraph("[0:START][1:t1:timestamp][2:t2:timestamp][3:t3:timestamp][4:END][0-1][FAILED:1-2][1-3][3-4][2-4]",
+					"t1: timestamp 'FAILED'->t2: timestamp && t3: timestamp");
+
+		TaskNode ctn = parse("t1: timestamp 'FAILED'->t2: timestamp && t3: timestamp");
+		Graph graph = ctn.toGraph();
+		assertEquals("t1: timestamp 'FAILED'->t2: timestamp && t3: timestamp", graph.toDSLText());
+		
+		ctn = parse("t1: timestamp --format=aabbcc 'FAILED'->t2: timestamp && t3: timestamp --format=gghhii");
+		graph = ctn.toGraph();
+		assertEquals("t1: timestamp --format=aabbcc 'FAILED'->t2: timestamp && t3: timestamp --format=gghhii", graph.toDSLText());
+
+		ctn = parse("t1: timestamp --format=aabbcc 'FAILED'->t2: timestamp --format=ddeeff && t3: timestamp --format=gghhii");
+		graph = ctn.toGraph();
+		Node node = graph.nodes.get(2);
+		assertEquals("ddeeff",node.properties.get("format"));
+		assertEquals("t1: timestamp --format=aabbcc 'FAILED'->t2: timestamp --format=ddeeff && t3: timestamp --format=gghhii", graph.toDSLText());
+		
+		assertGraph("[0:START][1:eee:timestamp:format=ttt][2:QQQQQ:timestamp:format=NOT-IN-TEXT][3:ooo:timestamp:format=yyyy][4:END][0-1][FAILED:1-2][1-3][3-4][2-4]",
+				    "eee: timestamp --format=ttt 'FAILED'->QQQQQ: timestamp --format=NOT-IN-TEXT && ooo: timestamp --format=yyyy");
 	}
 	
 	@Test

@@ -1,0 +1,13 @@
+version: '3'
+
+services:
+  dataflow-server:
+    environment:
+      - LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_CLOUD_DEPLOYER_SPI_LOCAL=DEBUG
+    volumes:
+      - ${SCDF_DOCKER_CONFIG:-~/.docker}:/root/.docker
+  skipper-server:
+    environment:
+      - LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_CLOUD_DEPLOYER_SPI_LOCAL=DEBUG
+    volumes:
+      - ${SCDF_DOCKER_CONFIG:-~/.docker}:/root/.docker

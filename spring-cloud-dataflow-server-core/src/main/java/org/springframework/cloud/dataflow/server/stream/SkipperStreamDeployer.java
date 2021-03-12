@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2019 the original author or authors.
+ * Copyright 2017-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.springframework.cloud.dataflow.server.stream;
 
 import java.io.File;
@@ -36,7 +37,6 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.module.SimpleAbstractTypeResolver;
 import com.fasterxml.jackson.databind.module.SimpleModule;
-import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.DumperOptions;
@@ -46,6 +46,7 @@ import org.springframework.cloud.dataflow.core.ApplicationType;
 import org.springframework.cloud.dataflow.core.DataFlowPropertyKeys;
 import org.springframework.cloud.dataflow.core.StreamAppDefinition;
 import org.springframework.cloud.dataflow.core.StreamDefinition;
+import org.springframework.cloud.dataflow.core.StreamDefinitionService;
 import org.springframework.cloud.dataflow.core.StreamDeployment;
 import org.springframework.cloud.dataflow.registry.service.AppRegistryService;
 import org.springframework.cloud.dataflow.rest.SkipperStream;
@@ -115,16 +116,21 @@ public class SkipperStreamDeployer implements StreamDeployer {
 
 	private final ForkJoinPool forkJoinPool;
 
+	private final StreamDefinitionService streamDefinitionService;
+
 	public SkipperStreamDeployer(SkipperClient skipperClient, StreamDefinitionRepository streamDefinitionRepository,
-			AppRegistryService appRegistryService, ForkJoinPool forkJoinPool) {
+			AppRegistryService appRegistryService, ForkJoinPool forkJoinPool,
+			StreamDefinitionService streamDefinitionService) {
 		Assert.notNull(skipperClient, "SkipperClient can not be null");
 		Assert.notNull(streamDefinitionRepository, "StreamDefinitionRepository can not be null");
 		Assert.notNull(appRegistryService, "StreamDefinitionRepository can not be null");
 		Assert.notNull(forkJoinPool, "ForkJoinPool can not be null");
+		Assert.notNull(streamDefinitionService, "StreamDefinitionService can not be null");
 		this.skipperClient = skipperClient;
 		this.streamDefinitionRepository = streamDefinitionRepository;
 		this.appRegistryService = appRegistryService;
 		this.forkJoinPool = forkJoinPool;
+		this.streamDefinitionService = streamDefinitionService;
 	}
 
 	public static List<AppStatus> deserializeAppStatus(String platformStatus) {
@@ -338,7 +344,7 @@ public class SkipperStreamDeployer implements StreamDeployer {
 	}
 
 	private String getRegisteredName(StreamDefinition streamDefinition, String adrAppName) {
-		for (StreamAppDefinition appDefinition : streamDefinition.getAppDefinitions()) {
+		for (StreamAppDefinition appDefinition : this.streamDefinitionService.getAppDefinitions(streamDefinition)) {
 			if (appDefinition.getName().equals(adrAppName)) {
 				return appDefinition.getRegisteredAppName();
 			}
@@ -565,23 +571,33 @@ public class SkipperStreamDeployer implements StreamDeployer {
 	public StreamDeployment getStreamInfo(String streamName) {
 		try {
 			String manifest = this.manifest(streamName);
-			List<SpringCloudDeployerApplicationManifest> appManifests =
-					new SpringCloudDeployerApplicationManifestReader().read(manifest);
-			Map<String, Map<String, String>> streamPropertiesMap = new HashMap<>();
-			for (SpringCloudDeployerApplicationManifest applicationManifest : appManifests) {
-				Map<String, String> versionAndDeploymentProperties = new HashMap<>();
-				SpringCloudDeployerApplicationSpec spec = applicationManifest.getSpec();
-				String applicationName = applicationManifest.getApplicationName();
-				versionAndDeploymentProperties.putAll(spec.getDeploymentProperties());
-				versionAndDeploymentProperties.put(SkipperStream.SKIPPER_SPEC_RESOURCE, spec.getResource());
-				versionAndDeploymentProperties.put(SkipperStream.SKIPPER_SPEC_VERSION, spec.getVersion());
-				streamPropertiesMap.put(applicationName, versionAndDeploymentProperties);
+			if (StringUtils.hasText(manifest)) {
+				List<SpringCloudDeployerApplicationManifest> appManifests =
+						new SpringCloudDeployerApplicationManifestReader().read(manifest);
+				Map<String, Map<String, String>> streamPropertiesMap = new HashMap<>();
+				for (SpringCloudDeployerApplicationManifest applicationManifest : appManifests) {
+					Map<String, String> versionAndDeploymentProperties = new HashMap<>();
+					SpringCloudDeployerApplicationSpec spec = applicationManifest.getSpec();
+					String applicationName = applicationManifest.getApplicationName();
+					versionAndDeploymentProperties.putAll(spec.getDeploymentProperties());
+					versionAndDeploymentProperties.put(SkipperStream.SKIPPER_SPEC_RESOURCE, spec.getResource());
+					versionAndDeploymentProperties.put(SkipperStream.SKIPPER_SPEC_VERSION, spec.getVersion());
+					streamPropertiesMap.put(applicationName, versionAndDeploymentProperties);
+				}
+				try {
+					ObjectMapper objectMapper = new ObjectMapper();
+					String json = objectMapper.writeValueAsString(streamPropertiesMap);
+					return new StreamDeployment(streamName, json);
+				}
+				catch (Exception e) {
+					throw new IllegalArgumentException("Unable to serializer streamPropertiesMap", e);
+				}
 			}
-			return new StreamDeployment(streamName, new JSONObject(streamPropertiesMap).toString());
 		}
 		catch (ReleaseNotFoundException e) {
-			return new StreamDeployment(streamName);
+				return new StreamDeployment(streamName);
 		}
+		return new StreamDeployment(streamName);
 	}
 
 	@Override

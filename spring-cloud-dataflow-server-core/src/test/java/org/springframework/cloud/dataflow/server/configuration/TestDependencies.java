@@ -35,6 +35,7 @@ import org.springframework.batch.item.ExecutionContext;
 import org.springframework.batch.item.database.support.DataFieldMaxValueIncrementerFactory;
 import org.springframework.batch.item.database.support.DefaultDataFieldMaxValueIncrementerFactory;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration;
 import org.springframework.boot.autoconfigure.jackson.Jackson2ObjectMapperBuilderCustomizer;
@@ -52,7 +53,10 @@ import org.springframework.cloud.dataflow.completion.CompletionConfiguration;
 import org.springframework.cloud.dataflow.completion.StreamCompletionProvider;
 import org.springframework.cloud.dataflow.completion.TaskCompletionProvider;
 import org.springframework.cloud.dataflow.configuration.metadata.ApplicationConfigurationMetadataResolver;
+import org.springframework.cloud.dataflow.container.registry.ContainerRegistryService;
+import org.springframework.cloud.dataflow.core.DefaultStreamDefinitionService;
 import org.springframework.cloud.dataflow.core.Launcher;
+import org.springframework.cloud.dataflow.core.StreamDefinitionService;
 import org.springframework.cloud.dataflow.core.TaskPlatform;
 import org.springframework.cloud.dataflow.registry.repository.AppRegistrationRepository;
 import org.springframework.cloud.dataflow.registry.service.AppRegistryService;
@@ -63,7 +67,7 @@ import org.springframework.cloud.dataflow.rest.support.jackson.ISO8601DateFormat
 import org.springframework.cloud.dataflow.rest.support.jackson.StepExecutionJacksonMixIn;
 import org.springframework.cloud.dataflow.server.DockerValidatorProperties;
 import org.springframework.cloud.dataflow.server.TaskValidationController;
-import org.springframework.cloud.dataflow.server.config.GrafanaInfoProperties;
+import org.springframework.cloud.dataflow.server.config.DataflowMetricsProperties;
 import org.springframework.cloud.dataflow.server.config.VersionInfoProperties;
 import org.springframework.cloud.dataflow.server.config.apps.CommonApplicationProperties;
 import org.springframework.cloud.dataflow.server.config.features.FeaturesProperties;
@@ -90,6 +94,12 @@ import org.springframework.cloud.dataflow.server.controller.TaskExecutionControl
 import org.springframework.cloud.dataflow.server.controller.TaskPlatformController;
 import org.springframework.cloud.dataflow.server.controller.TaskSchedulerController;
 import org.springframework.cloud.dataflow.server.controller.ToolsController;
+import org.springframework.cloud.dataflow.server.controller.assembler.AppRegistrationAssemblerProvider;
+import org.springframework.cloud.dataflow.server.controller.assembler.DefaultAppRegistrationAssemblerProvider;
+import org.springframework.cloud.dataflow.server.controller.assembler.DefaultStreamDefinitionAssemblerProvider;
+import org.springframework.cloud.dataflow.server.controller.assembler.DefaultTaskDefinitionAssemblerProvider;
+import org.springframework.cloud.dataflow.server.controller.assembler.StreamDefinitionAssemblerProvider;
+import org.springframework.cloud.dataflow.server.controller.assembler.TaskDefinitionAssemblerProvider;
 import org.springframework.cloud.dataflow.server.job.LauncherRepository;
 import org.springframework.cloud.dataflow.server.registry.DataFlowAppRegistryPopulator;
 import org.springframework.cloud.dataflow.server.repository.DataflowJobExecutionDao;
@@ -101,6 +111,7 @@ import org.springframework.cloud.dataflow.server.repository.JdbcDataflowTaskExec
 import org.springframework.cloud.dataflow.server.repository.StreamDefinitionRepository;
 import org.springframework.cloud.dataflow.server.repository.TaskDefinitionRepository;
 import org.springframework.cloud.dataflow.server.repository.TaskDeploymentRepository;
+import org.springframework.cloud.dataflow.server.service.LauncherService;
 import org.springframework.cloud.dataflow.server.service.SchedulerService;
 import org.springframework.cloud.dataflow.server.service.SchedulerServiceProperties;
 import org.springframework.cloud.dataflow.server.service.StreamService;
@@ -112,6 +123,8 @@ import org.springframework.cloud.dataflow.server.service.TaskExecutionService;
 import org.springframework.cloud.dataflow.server.service.TaskSaveService;
 import org.springframework.cloud.dataflow.server.service.TaskValidationService;
 import org.springframework.cloud.dataflow.server.service.impl.AppDeploymentRequestCreator;
+import org.springframework.cloud.dataflow.server.service.impl.ComposedTaskRunnerConfigurationProperties;
+import org.springframework.cloud.dataflow.server.service.impl.DefaultLauncherService;
 import org.springframework.cloud.dataflow.server.service.impl.DefaultSchedulerService;
 import org.springframework.cloud.dataflow.server.service.impl.DefaultStreamService;
 import org.springframework.cloud.dataflow.server.service.impl.DefaultTaskDeleteService;
@@ -187,7 +200,8 @@ import static org.mockito.Mockito.when;
 		TaskConfigurationProperties.class,
 		TaskProperties.class,
 		DockerValidatorProperties.class,
-		GrafanaInfoProperties.class })
+		DataflowMetricsProperties.class,
+		ComposedTaskRunnerConfigurationProperties.class })
 @EntityScan({
 		"org.springframework.cloud.dataflow.registry.domain",
 		"org.springframework.cloud.dataflow.core"
@@ -248,8 +262,8 @@ public class TestDependencies extends WebMvcConfigurationSupport {
 
 	@Bean
 	public StreamDeploymentController updatableStreamDeploymentController(StreamDefinitionRepository repository,
-			StreamService streamService) {
-		return new StreamDeploymentController(repository, streamService);
+			StreamService streamService, StreamDefinitionService streamDefinitionService) {
+		return new StreamDeploymentController(repository, streamService, streamDefinitionService);
 	}
 
 	@Bean
@@ -265,21 +279,27 @@ public class TestDependencies extends WebMvcConfigurationSupport {
 	@Bean
 	public StreamValidationService streamValidationService(AppRegistryService appRegistry,
 			DockerValidatorProperties dockerValidatorProperties,
-			StreamDefinitionRepository streamDefinitionRepository) {
+			StreamDefinitionRepository streamDefinitionRepository,
+			StreamDefinitionService streamDefinitionService) {
 		return new DefaultStreamValidationService(appRegistry,
 				dockerValidatorProperties,
-				streamDefinitionRepository);
+				streamDefinitionRepository,
+				streamDefinitionService);
 	}
 
 	@Bean
 	public TaskValidationService taskValidationService(AppRegistryService appRegistry,
 			DockerValidatorProperties dockerValidatorProperties,
-			TaskDefinitionRepository taskDefinitionRepository,
-			TaskConfigurationProperties taskConfigurationProperties) {
+			TaskDefinitionRepository taskDefinitionRepository) {
 		return new DefaultTaskValidationService(appRegistry,
 				dockerValidatorProperties,
-				taskDefinitionRepository,
-				taskConfigurationProperties.getComposedTaskRunnerName());
+				taskDefinitionRepository);
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public StreamDefinitionService streamDefinitionService() {
+		return new DefaultStreamDefinitionService();
 	}
 
 	@Bean
@@ -287,26 +307,35 @@ public class TestDependencies extends WebMvcConfigurationSupport {
 			SkipperStreamDeployer skipperStreamDeployer,
 			AppDeploymentRequestCreator appDeploymentRequestCreator,
 			StreamValidationService streamValidationService,
-			AuditRecordService auditRecordService) {
+			AuditRecordService auditRecordService,
+			StreamDefinitionService streamDefinitionService) {
 		return new DefaultStreamService(streamDefinitionRepository, skipperStreamDeployer,
-				appDeploymentRequestCreator, streamValidationService, auditRecordService);
+				appDeploymentRequestCreator, streamValidationService, auditRecordService, streamDefinitionService);
+	}
+
+	@Bean
+	public ContainerRegistryService containerRegistryService() {
+		return mock(ContainerRegistryService.class);
 	}
 
 	@Bean
 	public AppDeploymentRequestCreator streamDeploymentPropertiesUtils(AppRegistryService appRegistry,
 			CommonApplicationProperties commonApplicationProperties,
-			ApplicationConfigurationMetadataResolver applicationConfigurationMetadataResolver) {
+			ApplicationConfigurationMetadataResolver applicationConfigurationMetadataResolver,
+			StreamDefinitionService streamDefinitionService) {
 		return new AppDeploymentRequestCreator(appRegistry,
 				commonApplicationProperties,
-				applicationConfigurationMetadataResolver);
+				applicationConfigurationMetadataResolver,
+				streamDefinitionService);
 	}
 
 	@Bean
 	public SkipperStreamDeployer skipperStreamDeployer(SkipperClient skipperClient,
 			AppRegistryService appRegistryService,
-			StreamDefinitionRepository streamDefinitionRepository) {
+			StreamDefinitionRepository streamDefinitionRepository,
+			StreamDefinitionService streamDefinitionService) {
 		return new SkipperStreamDeployer(skipperClient, streamDefinitionRepository, appRegistryService,
-				new ForkJoinPool(2));
+				new ForkJoinPool(2), streamDefinitionService);
 	}
 
 	@Bean
@@ -329,8 +358,18 @@ public class TestDependencies extends WebMvcConfigurationSupport {
 	}
 
 	@Bean
-	public StreamDefinitionController streamDefinitionController(StreamService streamService) {
-		return new StreamDefinitionController(streamService);
+	public DefaultStreamDefinitionAssemblerProvider streamDefinitionAssemblerProvider(
+			StreamDefinitionService streamDefinitionService, StreamService streamService) {
+		return new DefaultStreamDefinitionAssemblerProvider(streamDefinitionService, streamService);
+	}
+
+	@Bean
+	public StreamDefinitionController streamDefinitionController(StreamService streamService,
+			StreamDefinitionService streamDefinitionService, AppRegistryService appRegistryService,
+			StreamDefinitionAssemblerProvider streamDefinitionAssemblerProvider,
+			AppRegistrationAssemblerProvider appRegistrationAssemblerProvider) {
+		return new StreamDefinitionController(streamService, streamDefinitionService, appRegistryService,
+				streamDefinitionAssemblerProvider, appRegistrationAssemblerProvider);
 	}
 
 	@Bean
@@ -370,9 +409,16 @@ public class TestDependencies extends WebMvcConfigurationSupport {
 			Optional<StreamDefinitionRepository> streamDefinitionRepository,
 			Optional<StreamService> streamService,
 			AppRegistryService appRegistry,
-			ApplicationConfigurationMetadataResolver metadataResolver) {
+			ApplicationConfigurationMetadataResolver metadataResolver,
+			StreamDefinitionService streamDefinitionService,
+			AppRegistrationAssemblerProvider appRegistrationAssemblerProvider) {
 		return new AppRegistryController(streamDefinitionRepository, streamService, appRegistry, metadataResolver,
-				new ForkJoinPool(2));
+				new ForkJoinPool(2), streamDefinitionService, appRegistrationAssemblerProvider);
+	}
+
+	@Bean
+	public AppRegistrationAssemblerProvider appRegistryAssemblerProvider() {
+		return new DefaultAppRegistrationAssemblerProvider();
 	}
 
 	@Bean
@@ -391,9 +437,16 @@ public class TestDependencies extends WebMvcConfigurationSupport {
 	}
 
 	@Bean
+	public TaskDefinitionAssemblerProvider taskDefinitionAssemblerProvider(TaskExecutionService taskExecutionService) {
+		return new DefaultTaskDefinitionAssemblerProvider(taskExecutionService);
+	}
+
+	@Bean
 	public TaskDefinitionController taskDefinitionController(TaskExplorer explorer, TaskDefinitionRepository repository,
-			TaskSaveService taskSaveService, TaskDeleteService taskDeleteService) {
-		return new TaskDefinitionController(explorer, repository, taskSaveService, taskDeleteService);
+			TaskSaveService taskSaveService, TaskDeleteService taskDeleteService,
+			TaskDefinitionAssemblerProvider taskDefinitionAssemblerProvider) {
+		return new TaskDefinitionController(explorer, repository, taskSaveService, taskDeleteService,
+				taskDefinitionAssemblerProvider);
 	}
 
 	@Bean
@@ -410,8 +463,14 @@ public class TestDependencies extends WebMvcConfigurationSupport {
 	}
 
 	@Bean
-	public TaskPlatformController taskPlatformController(LauncherRepository launcherRepository) {
-		return new TaskPlatformController(launcherRepository);
+	public TaskPlatformController taskPlatformController(LauncherService launcherService) {
+		return new TaskPlatformController(launcherService);
+	}
+
+
+	@Bean
+	LauncherService launcherService(LauncherRepository launcherRepository) {
+		return new DefaultLauncherService(launcherRepository);
 	}
 
 	@Bean
@@ -518,14 +577,17 @@ public class TestDependencies extends WebMvcConfigurationSupport {
 			TaskExplorer taskExplorer, DataflowTaskExecutionDao dataflowTaskExecutionDao,
 			DataflowTaskExecutionMetadataDao dataflowTaskExecutionMetadataDao,
 			OAuth2TokenUtilsService oauth2TokenUtilsService,
-			TaskSaveService taskSaveService) {
+			TaskSaveService taskSaveService,
+			TaskConfigurationProperties taskConfigurationProperties,
+			ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties) {
 
 		return new DefaultTaskExecutionService(
 				launcherRepository, auditRecordService, taskRepository,
 				taskExecutionInfoService, taskDeploymentRepository,
 				taskExecutionRepositoryService, taskAppDeploymentRequestCreator,
 				taskExplorer, dataflowTaskExecutionDao, dataflowTaskExecutionMetadataDao,
-				oauth2TokenUtilsService, taskSaveService);
+				oauth2TokenUtilsService, taskSaveService, taskConfigurationProperties,
+				composedTaskRunnerConfigurationProperties);
 	}
 
 	@Bean
@@ -546,10 +608,10 @@ public class TestDependencies extends WebMvcConfigurationSupport {
 	public TaskExecutionInfoService taskDefinitionRetriever(AppRegistryService registry,
 			TaskExplorer taskExplorer, TaskDefinitionRepository taskDefinitionRepository,
 			TaskConfigurationProperties taskConfigurationProperties, LauncherRepository launcherRepository,
-			List<TaskPlatform> platforms) {
+			List<TaskPlatform> platforms, ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties) {
 		return new DefaultTaskExecutionInfoService(new DataSourceProperties(),
 				registry, taskExplorer, taskDefinitionRepository,
-				taskConfigurationProperties, launcherRepository, platforms);
+				taskConfigurationProperties, launcherRepository, platforms, composedTaskRunnerConfigurationProperties);
 	}
 
 	@Bean
@@ -562,12 +624,14 @@ public class TestDependencies extends WebMvcConfigurationSupport {
 			TaskPlatform taskPlatform, TaskDefinitionRepository taskDefinitionRepository,
 			AppRegistryService registry, ResourceLoader resourceLoader,
 			ApplicationConfigurationMetadataResolver metaDataResolver, AuditRecordService auditRecordService,
-			TaskConfigurationProperties taskConfigurationProperties, DataSourceProperties dataSourceProperties) {
+			TaskConfigurationProperties taskConfigurationProperties, DataSourceProperties dataSourceProperties,
+			ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties) {
 		return new DefaultSchedulerService(commonApplicationProperties,
-				taskPlatform, taskDefinitionRepository,
+				Collections.singletonList(taskPlatform), taskDefinitionRepository,
 				registry, resourceLoader,
 				taskConfigurationProperties, dataSourceProperties, null,
-				metaDataResolver, new SchedulerServiceProperties(), auditRecordService);
+				metaDataResolver, new SchedulerServiceProperties(), auditRecordService,
+				composedTaskRunnerConfigurationProperties);
 	}
 
 	@Bean
@@ -581,7 +645,8 @@ public class TestDependencies extends WebMvcConfigurationSupport {
 
 	@Bean
 	public AboutController aboutController(VersionInfoProperties versionInfoProperties,
-			FeaturesProperties featuresProperties, StreamDeployer streamDeployer, GrafanaInfoProperties grafanaInfoProperties) {
+			FeaturesProperties featuresProperties, StreamDeployer streamDeployer,
+			DataflowMetricsProperties monitoringDashboardInfoProperties) {
 
 		Launcher launcher = mock(Launcher.class);
 		TaskLauncher taskLauncher = mock(TaskLauncher.class);
@@ -602,7 +667,7 @@ public class TestDependencies extends WebMvcConfigurationSupport {
 
 		return new AboutController(streamDeployer, launcherRepository,
 				featuresProperties, versionInfoProperties,
-				mock(SecurityStateBean.class), grafanaInfoProperties);
+				mock(SecurityStateBean.class), monitoringDashboardInfoProperties);
 	}
 
 	@Bean

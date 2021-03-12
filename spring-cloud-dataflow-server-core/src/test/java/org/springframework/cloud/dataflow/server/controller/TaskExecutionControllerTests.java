@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2019 the original author or authors.
+ * Copyright 2016-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -62,6 +62,7 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 
+import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
@@ -306,7 +307,7 @@ public class TaskExecutionControllerTests {
 		mockMvc.perform(delete("/tasks/executions/1").param("action", "does_not_exist").accept(MediaType.APPLICATION_JSON))
 		.andDo(print())
 		.andExpect(status().is(400))
-		.andExpect(jsonPath("$[0].message", is("The parameter 'action' must contain one of the following values: 'CLEANUP, REMOVE_DATA'.")));
+		.andExpect(jsonPath("content[0].message", is("The parameter 'action' must contain one of the following values: 'CLEANUP, REMOVE_DATA'.")));
 	}
 
 	@Test
@@ -354,8 +355,8 @@ public class TaskExecutionControllerTests {
 		mockMvc.perform(delete("/tasks/executions/2"))
 			.andDo(print())
 			.andExpect(status().is(400))
-			.andExpect(jsonPath("$[0].logref", is("CannotDeleteNonParentTaskExecutionException")))
-			.andExpect(jsonPath("$[0].message", is("Cannot delete non-parent TaskExecution with id 1")));
+			.andExpect(jsonPath("content[0].logref", is("CannotDeleteNonParentTaskExecutionException")))
+			.andExpect(jsonPath("content[0].message", is("Cannot delete non-parent TaskExecution with id 1")));
 	}
 
 	private ResultActions verifyTaskArgs(List<String> expectedArgs, String prefix, ResultActions ra) throws Exception {
@@ -364,5 +365,20 @@ public class TaskExecutionControllerTests {
 			ra.andExpect(jsonPath(String.format(prefix + "arguments[%d]", argCount), is(expectedArgs.get(argCount))));
 		}
 		return ra;
+	}
+
+	@Test
+	public void testSorting() throws Exception {
+		mockMvc.perform(get("/tasks/executions").param("sort", "TASK_EXECUTION_ID").accept(MediaType.APPLICATION_JSON))
+			.andExpect(status().isOk());
+		mockMvc.perform(get("/tasks/executions").param("sort", "task_execution_id").accept(MediaType.APPLICATION_JSON))
+			.andExpect(status().isOk());
+
+		mockMvc.perform(get("/tasks/executions").param("sort", "WRONG_FIELD").accept(MediaType.APPLICATION_JSON))
+			.andExpect(status().is5xxServerError())
+			.andExpect(content().string(containsString("Sorting column WRONG_FIELD not allowed")));
+		mockMvc.perform(get("/tasks/executions").param("sort", "wrong_field").accept(MediaType.APPLICATION_JSON))
+			.andExpect(status().is5xxServerError())
+			.andExpect(content().string(containsString("Sorting column wrong_field not allowed")));
 	}
 }

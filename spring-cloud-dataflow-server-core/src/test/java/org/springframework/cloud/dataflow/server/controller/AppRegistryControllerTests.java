@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2019 the original author or authors.
+ * Copyright 2017-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -59,6 +59,8 @@ import org.springframework.util.Assert;
 import org.springframework.util.StreamUtils;
 import org.springframework.web.context.WebApplicationContext;
 
+import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
 import static org.junit.Assert.assertThat;
@@ -127,6 +129,22 @@ public class AppRegistryControllerTests {
 	@Test
 	public void testRegisterInvalidAppUri() throws Exception {
 		mockMvc.perform(post("/apps/sink/log1/1.2.0.RELEASE").param("uri", "\\boza").accept(MediaType.APPLICATION_JSON))
+				.andDo(print()).andExpect(status().is5xxServerError());
+	}
+
+	@Test
+	public void testRegisterAppWithInvalidName() throws Exception {
+		mockMvc.perform(post("/apps/sink/log:1")
+				.param("uri", "maven://org.springframework.cloud.stream.app:log-sink-rabbit:1.2.0.RELEASE")
+				.accept(MediaType.APPLICATION_JSON)).andDo(print()).andExpect(status().is5xxServerError());
+	}
+
+	@Test
+	public void testRegisterAppWithNameLongerThan255Characters() throws Exception {
+		mockMvc.perform(post(
+				"/apps/sink/sinkAppToTestIfLengthIsGreaterThanTwoHundredAndFiftyFiveCharacterssinkAppToTestIfLengthIsGreaterThanTwoHundredAndFiftyFiveCharacterssinkAppToTestIfLengthIsGreaterThanTwoHundredAndFiftyFiveCharacterssinkAppToTestIfLengthIsGreaterThanTwoHundredAndFiftyFiveCharacters")
+						.param("uri", "maven://org.springframework.cloud.stream.app:log-sink-rabbit:1.2.0.RELEASE")
+						.accept(MediaType.APPLICATION_JSON))
 				.andDo(print()).andExpect(status().is5xxServerError());
 	}
 
@@ -281,6 +299,19 @@ public class AppRegistryControllerTests {
 	public void testListApplications() throws Exception {
 		mockMvc.perform(get("/apps").accept(MediaType.APPLICATION_JSON)).andDo(print()).andExpect(status().isOk())
 				.andExpect(jsonPath("content", hasSize(4)));
+	}
+
+	@Test
+	public void testListAppsWithMultiVersions() throws Exception {
+		this.appRegistryService.importAll(false, new ClassPathResource("META-INF/test-apps-multi-versions.properties"));
+		mockMvc.perform(get("/apps").accept(MediaType.APPLICATION_JSON)).andDo(print()).andExpect(status().isOk())
+				.andExpect(jsonPath("content", hasSize(6)));
+		mockMvc.perform(get("/apps?defaultVersion=true").accept(MediaType.APPLICATION_JSON)).andDo(print()).andExpect(status().isOk())
+				.andExpect(jsonPath("content", hasSize(4)))
+				.andExpect(jsonPath("$.content[*].versions", containsInAnyOrder(hasSize(1), hasSize(2), hasSize(2), hasSize(1))))
+				.andExpect(jsonPath("$.content[*].versions", containsInAnyOrder(contains("1.0.0.BUILD-SNAPSHOT"), containsInAnyOrder("1.0.0.RELEASE", "1.0.0.BUILD-SNAPSHOT"),
+						contains("1.0.0.BUILD-SNAPSHOT"), containsInAnyOrder("1.0.0.RELEASE","1.0.0.BUILD-SNAPSHOT"))))
+				.andExpect(jsonPath("$.content[*].defaultVersion", contains(true, true, true, true)));
 	}
 
 	@Test

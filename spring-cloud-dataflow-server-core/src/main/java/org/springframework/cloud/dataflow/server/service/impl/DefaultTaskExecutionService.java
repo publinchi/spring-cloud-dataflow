@@ -140,6 +140,10 @@ public class DefaultTaskExecutionService implements TaskExecutionService {
 
 	private boolean autoCreateTaskDefinitions;
 
+	private TaskConfigurationProperties taskConfigurationProperties;
+
+	private ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties;
+
 	/**
 	 * Initializes the {@link DefaultTaskExecutionService}.
 	 *
@@ -157,18 +161,58 @@ public class DefaultTaskExecutionService implements TaskExecutionService {
 	 * @param oauth2TokenUtilsService the oauth2 token server
 	 * @param taskSaveService the task save service
 	 */
+	@Deprecated
 	public DefaultTaskExecutionService(LauncherRepository launcherRepository,
-			AuditRecordService auditRecordService,
-			TaskRepository taskRepository,
-			TaskExecutionInfoService taskExecutionInfoService,
-			TaskDeploymentRepository taskDeploymentRepository,
-			TaskExecutionCreationService taskExecutionRepositoryService,
-			TaskAppDeploymentRequestCreator taskAppDeploymentRequestCreator,
-			TaskExplorer taskExplorer,
-			DataflowTaskExecutionDao dataflowTaskExecutionDao,
-			DataflowTaskExecutionMetadataDao dataflowTaskExecutionMetadataDao,
-			OAuth2TokenUtilsService oauth2TokenUtilsService,
-			TaskSaveService taskSaveService) {
+									   AuditRecordService auditRecordService,
+									   TaskRepository taskRepository,
+									   TaskExecutionInfoService taskExecutionInfoService,
+									   TaskDeploymentRepository taskDeploymentRepository,
+									   TaskExecutionCreationService taskExecutionRepositoryService,
+									   TaskAppDeploymentRequestCreator taskAppDeploymentRequestCreator,
+									   TaskExplorer taskExplorer,
+									   DataflowTaskExecutionDao dataflowTaskExecutionDao,
+									   DataflowTaskExecutionMetadataDao dataflowTaskExecutionMetadataDao,
+									   OAuth2TokenUtilsService oauth2TokenUtilsService,
+									   TaskSaveService taskSaveService,
+									   TaskConfigurationProperties taskConfigurationProperties) {
+		this(launcherRepository, auditRecordService, taskRepository, taskExecutionInfoService, taskDeploymentRepository,
+				taskExecutionRepositoryService, taskAppDeploymentRequestCreator, taskExplorer, dataflowTaskExecutionDao,
+				dataflowTaskExecutionMetadataDao, oauth2TokenUtilsService, taskSaveService, taskConfigurationProperties,
+				null);
+	}
+
+	/**
+	 * Initializes the {@link DefaultTaskExecutionService}.
+	 *
+	 * @param launcherRepository the repository of task launcher used to launch task apps.
+	 * @param auditRecordService the audit record service
+	 * @param taskRepository the repository to use for accessing and updating task executions
+	 * @param taskExecutionInfoService the task execution info service
+	 * @param taskDeploymentRepository the repository to track task deployment
+	 * @param taskExecutionInfoService the service used to setup a task execution
+	 * @param taskExecutionRepositoryService the service used to create the task execution
+	 * @param taskAppDeploymentRequestCreator the task app deployment request creator
+	 * @param taskExplorer the task explorer
+	 * @param dataflowTaskExecutionDao the dataflow task execution dao
+	 * @param dataflowTaskExecutionMetadataDao repository used to manipulate task manifests
+	 * @param oauth2TokenUtilsService the oauth2 token server
+	 * @param taskSaveService the task save service
+	 * @param composedTaskRunnerConfigurationProperties properties used to configure the composed task runner
+	 */
+	public DefaultTaskExecutionService(LauncherRepository launcherRepository,
+									   AuditRecordService auditRecordService,
+									   TaskRepository taskRepository,
+									   TaskExecutionInfoService taskExecutionInfoService,
+									   TaskDeploymentRepository taskDeploymentRepository,
+									   TaskExecutionCreationService taskExecutionRepositoryService,
+									   TaskAppDeploymentRequestCreator taskAppDeploymentRequestCreator,
+									   TaskExplorer taskExplorer,
+									   DataflowTaskExecutionDao dataflowTaskExecutionDao,
+									   DataflowTaskExecutionMetadataDao dataflowTaskExecutionMetadataDao,
+									   OAuth2TokenUtilsService oauth2TokenUtilsService,
+									   TaskSaveService taskSaveService,
+									   TaskConfigurationProperties taskConfigurationProperties,
+									   ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties) {
 		Assert.notNull(launcherRepository, "launcherRepository must not be null");
 		Assert.notNull(auditRecordService, "auditRecordService must not be null");
 		Assert.notNull(taskExecutionInfoService, "taskExecutionInfoService must not be null");
@@ -181,6 +225,7 @@ public class DefaultTaskExecutionService implements TaskExecutionService {
 		Assert.notNull(dataflowTaskExecutionDao, "dataflowTaskExecutionDao must not be null");
 		Assert.notNull(dataflowTaskExecutionMetadataDao, "dataflowTaskExecutionMetadataDao must not be null");
 		Assert.notNull(taskSaveService, "taskSaveService must not be null");
+		Assert.notNull(taskConfigurationProperties, "taskConfigurationProperties must not be null");
 
 		this.oauth2TokenUtilsService = oauth2TokenUtilsService;
 		this.launcherRepository = launcherRepository;
@@ -194,6 +239,8 @@ public class DefaultTaskExecutionService implements TaskExecutionService {
 		this.dataflowTaskExecutionDao = dataflowTaskExecutionDao;
 		this.dataflowTaskExecutionMetadataDao = dataflowTaskExecutionMetadataDao;
 		this.taskSaveService = taskSaveService;
+		this.taskConfigurationProperties = taskConfigurationProperties;
+		this.composedTaskRunnerConfigurationProperties = composedTaskRunnerConfigurationProperties;
 	}
 
 	/**
@@ -202,12 +249,10 @@ public class DefaultTaskExecutionService implements TaskExecutionService {
 	 *                 If a task definition does not exist, one will be created if `autoCreateTask-Definitions` is true.  Must not be null or empty.
 	 * @param taskDeploymentProperties Optional deployment properties. Must not be null.
 	 * @param commandLineArgs Optional runtime commandline argument
-	 * @param composedTaskRunnerName the name of the app the user would like to use if they don't want the default.  If null default will be used.
 	 * @return the task execution ID.
 	 */
 	@Override
-	public long executeTask(String taskName, Map<String, String> taskDeploymentProperties, List<String> commandLineArgs,
-			String composedTaskRunnerName) {
+	public long executeTask(String taskName, Map<String, String> taskDeploymentProperties, List<String> commandLineArgs) {
 		// Get platform name and fallback to 'default'
 		String platformName = getPlatform(taskDeploymentProperties);
 
@@ -219,7 +264,8 @@ public class DefaultTaskExecutionService implements TaskExecutionService {
 						"Unable to launch %s on platform %s because it is being upgraded", taskName, platformName));
 			}
 		}
-
+		Launcher launcher = this.launcherRepository.findByName(platformName);
+		validateTaskName(taskName, launcher);
 		// Remove since the key for task platform name will not pass validation for app,
 		// deployer, or scheduler prefix.
 		// Then validate
@@ -241,48 +287,50 @@ public class DefaultTaskExecutionService implements TaskExecutionService {
 
 
 		TaskExecutionInformation taskExecutionInformation =
-				findOrCreateTaskExecutionInformation(taskName, taskDeploymentProperties, composedTaskRunnerName);
+				findOrCreateTaskExecutionInformation(taskName, taskDeploymentProperties, launcher.getType());
+
+		TaskLauncher taskLauncher = findTaskLauncher(platformName);
 
 		if (taskExecutionInformation.isComposed()) {
 			handleAccessToken(commandLineArgs, taskExecutionInformation);
-		}
-
-		TaskLauncher taskLauncher = findTaskLauncher(platformName);
-		if(taskExecutionInformation.isComposed()) {
+			TaskServiceUtils.addImagePullSecretProperty(taskDeploymentProperties,
+					this.composedTaskRunnerConfigurationProperties);
 			isCTRSplitValidForCurrentCTR(taskLauncher, taskExecutionInformation.getTaskDefinition());
 		}
 
-		// Build app deploy request and stash deploy props there
+		// Create task execution for the task
 		TaskExecution taskExecution = taskExecutionRepositoryService.createTaskExecution(taskName);
-		AppDeploymentRequest appDeploymentRequest = this.taskAppDeploymentRequestCreator.
-				createRequest(taskExecution, taskExecutionInformation, commandLineArgs, platformName);
 
-		// Come up with existing and new manifests, analyze difference and update
-		// new new manifest accordingly.
-		TaskManifest taskManifest = createTaskManifest(platformName, taskExecutionInformation, appDeploymentRequest);
+		// Get the previous manifest
 		TaskManifest previousManifest = this.dataflowTaskExecutionMetadataDao.getLatestManifest(taskName);
-
+		
 		// Analysing task to know what to bring forward from existing
-		TaskAnalysisReport report = taskAnalyzer.analyze(previousManifest, taskManifest);
+		TaskAnalysisReport report = taskAnalyzer
+				.analyze(
+						previousManifest != null
+								? previousManifest.getTaskDeploymentRequest() != null
+										? previousManifest.getTaskDeploymentRequest().getDeploymentProperties() : null
+								: null,
+						DeploymentPropertiesUtils.qualifyDeployerProperties(
+								taskExecutionInformation.getTaskDeploymentProperties(),
+								taskExecutionInformation.isComposed() ? "composed-task-runner"
+										: taskExecutionInformation.getTaskDefinition().getRegisteredAppName()));
 		logger.debug("Task analysis report {}", report);
 
 		// We now have a new props and args what should really get used.
 		Map<String, String> mergedTaskDeploymentProperties = report.getMergedDeploymentProperties();
 
+		// Get the merged deployment properties and update the task exec. info
 		taskExecutionInformation.setTaskDeploymentProperties(mergedTaskDeploymentProperties);
-		appDeploymentRequest = updateDeploymentProperties(commandLineArgs, platformName, taskExecutionInformation,
-				taskExecution, mergedTaskDeploymentProperties);
 
-		AppDeploymentRequest request = new AppDeploymentRequest(appDeploymentRequest.getDefinition(),
-				appDeploymentRequest.getResource(),
-				mergedTaskDeploymentProperties,
-				appDeploymentRequest.getCommandlineArguments());
+		// Finally create App deployment request
+		AppDeploymentRequest request = this.taskAppDeploymentRequestCreator.createRequest(taskExecution,
+				taskExecutionInformation, commandLineArgs, platformName, launcher.getType());
 
-		taskManifest.setTaskDeploymentRequest(request);
-
+		TaskManifest taskManifest = createTaskManifest(platformName, request);
 		String taskDeploymentId = null;
+		
 		try {
-			Launcher launcher = this.launcherRepository.findByName(platformName);
 			if(launcher.getType().equals(TaskPlatformFactory.CLOUDFOUNDRY_PLATFORM_TYPE) && !isAppDeploymentSame(previousManifest, taskManifest)) {
 				verifyTaskIsNotRunning(taskName, taskExecution, taskLauncher);
 				validateAndLockUpgrade(taskName, platformName);
@@ -290,7 +338,7 @@ public class DefaultTaskExecutionService implements TaskExecutionService {
 				taskLauncher.destroy(taskName);
 			}
 			this.dataflowTaskExecutionMetadataDao.save(taskExecution, taskManifest);
-			taskDeploymentId = taskLauncher.launch(appDeploymentRequest);
+			taskDeploymentId = taskLauncher.launch(request);
 			saveExternalExecutionId(taskExecution, taskDeploymentId);
 		}
 		finally {
@@ -321,12 +369,23 @@ public class DefaultTaskExecutionService implements TaskExecutionService {
 		return taskExecution.getExecutionId();
 	}
 
-	private TaskExecutionInformation findOrCreateTaskExecutionInformation(String taskName, Map<String, String> taskDeploymentProperties, String composedTaskRunnerName) {
+	private void validateTaskName(String taskName, Launcher launcher) {
+		if (launcher.getType().equals(TaskPlatformFactory.CLOUDFOUNDRY_PLATFORM_TYPE)
+				|| launcher.getType().equals(TaskPlatformFactory.KUBERNETES_PLATFORM_TYPE)) {
+			if (taskName.length() > 63)
+				throw new IllegalStateException(String.format(
+						"Task name [%s] length must be less than 64 characters to be launched on platform %s",
+						taskName, launcher.getType()));
+		}
+	}
+
+	private TaskExecutionInformation findOrCreateTaskExecutionInformation(String taskName, Map<String, String> taskDeploymentProperties, String platform) {
 
 		TaskExecutionInformation taskExecutionInformation;
 		try {
 			 taskExecutionInformation = taskExecutionInfoService
-					.findTaskExecutionInformation(taskName, taskDeploymentProperties, composedTaskRunnerName);
+					.findTaskExecutionInformation(taskName, taskDeploymentProperties,
+							TaskServiceUtils.addDatabaseCredentials(this.taskConfigurationProperties.isUseKubernetesSecretsForDbCredentials(), platform));
 
 		} catch (NoSuchTaskDefinitionException e) {
 			if (autoCreateTaskDefinitions) {
@@ -334,7 +393,8 @@ public class DefaultTaskExecutionService implements TaskExecutionService {
 				TaskDefinition taskDefinition = new TaskDefinition(taskName, taskName);
 				taskSaveService.saveTaskDefinition(taskDefinition);
 				taskExecutionInformation = taskExecutionInfoService
-						.findTaskExecutionInformation(taskName, taskDeploymentProperties, composedTaskRunnerName);
+						.findTaskExecutionInformation(taskName, taskDeploymentProperties,
+								TaskServiceUtils.addDatabaseCredentials(this.taskConfigurationProperties.isUseKubernetesSecretsForDbCredentials(), platform));
 			}
 			else {
 				throw e;
@@ -371,7 +431,9 @@ public class DefaultTaskExecutionService implements TaskExecutionService {
 				containsAccessToken = true;
 			}
 		}
-
+		if(TaskServiceUtils.isUseUserAccessToken(this.taskConfigurationProperties, this.composedTaskRunnerConfigurationProperties)) {
+			useUserAccessToken = true;
+		}
 		if (!containsAccessToken && useUserAccessToken && oauth2TokenUtilsService != null) {
 			final String token = oauth2TokenUtilsService.getAccessTokenOfAuthenticatedUser();
 
@@ -405,6 +467,7 @@ public class DefaultTaskExecutionService implements TaskExecutionService {
 	 * @return an updated {@code AppDeploymentRequest}
 	 */
 	private AppDeploymentRequest updateDeploymentProperties(List<String> commandLineArgs, String platformName,
+			String platformType,
 			TaskExecutionInformation taskExecutionInformation, TaskExecution taskExecution,
 			Map<String, String> deploymentProperties) {
 		AppDeploymentRequest appDeploymentRequest;
@@ -417,7 +480,7 @@ public class DefaultTaskExecutionService implements TaskExecutionService {
 		info.setTaskDeploymentProperties(deploymentProperties);
 
 		appDeploymentRequest = this.taskAppDeploymentRequestCreator.
-				createRequest(taskExecution, info, commandLineArgs, platformName);
+				createRequest(taskExecution, info, commandLineArgs, platformName, platformType);
 		return appDeploymentRequest;
 	}
 
@@ -481,13 +544,11 @@ public class DefaultTaskExecutionService implements TaskExecutionService {
 	/**
 	 * Create a {@code TaskManifest}
 	 *
-	 * @param platformName name of the platform configuration to run the task on
-	 * @param taskExecutionInformation details about the task to be run
+	 * @param platformName name of the platform configuration to run the task on	 * 
 	 * @param appDeploymentRequest the details about the deployment to be executed
 	 * @return {@code TaskManifest}
 	 */
-	private TaskManifest createTaskManifest(String platformName, TaskExecutionInformation taskExecutionInformation,
-			AppDeploymentRequest appDeploymentRequest) {
+	private TaskManifest createTaskManifest(String platformName, AppDeploymentRequest appDeploymentRequest) {
 		TaskManifest taskManifest = new TaskManifest();
 		taskManifest.setPlatformName(platformName);
 		taskManifest.setTaskDeploymentRequest(appDeploymentRequest);
@@ -556,11 +617,6 @@ public class DefaultTaskExecutionService implements TaskExecutionService {
 		same = same && previousDeploymentProperties.equals(newDeploymentProperties) && previousAppProperties.equals(newAppProperties);
 
 		return same;
-	}
-
-	@Override
-	public long executeTask(String taskName, Map<String, String> taskDeploymentProperties, List<String> commandLineArgs) {
-		return executeTask(taskName, taskDeploymentProperties, commandLineArgs, null);
 	}
 
 	@Override

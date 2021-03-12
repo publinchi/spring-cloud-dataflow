@@ -18,6 +18,7 @@ package org.springframework.cloud.dataflow.server.service.impl;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,6 +37,7 @@ import org.springframework.batch.core.launch.NoSuchJobException;
 import org.springframework.batch.core.launch.NoSuchJobExecutionException;
 import org.springframework.batch.core.launch.NoSuchJobInstanceException;
 import org.springframework.cloud.dataflow.core.TaskDefinition;
+import org.springframework.cloud.dataflow.core.TaskManifest;
 import org.springframework.cloud.dataflow.rest.job.JobInstanceExecutions;
 import org.springframework.cloud.dataflow.rest.job.TaskJobExecution;
 import org.springframework.cloud.dataflow.rest.job.support.JobUtils;
@@ -121,6 +123,33 @@ public class DefaultTaskJobService implements TaskJobService {
 	}
 
 	@Override
+	public List<TaskJobExecution> listJobExecutionsForJobWithStepCount(Pageable pageable,
+			Date fromDate, Date toDate) {
+		Assert.notNull(pageable, "pageable must not be null");
+		return getTaskJobExecutionsWithStepCountForList(
+				jobService.listJobExecutionsForJobWithStepCount(fromDate, toDate, getPageOffset(pageable),
+						pageable.getPageSize()));
+	}
+
+	@Override
+	public List<TaskJobExecution> listJobExecutionsForJobWithStepCountFilteredByJobInstanceId(
+			Pageable pageable, int jobInstanceId) throws NoSuchJobException {
+		Assert.notNull(pageable, "pageable must not be null");
+		return getTaskJobExecutionsWithStepCountForList(
+				jobService.listJobExecutionsForJobWithStepCountFilteredByJobInstanceId(jobInstanceId, getPageOffset(pageable),
+						pageable.getPageSize()));
+	}
+
+	@Override
+	public List<TaskJobExecution> listJobExecutionsForJobWithStepCountFilteredByTaskExecutionId(
+			Pageable pageable, int taskExecutionId) throws NoSuchJobException {
+		Assert.notNull(pageable, "pageable must not be null");
+		return getTaskJobExecutionsWithStepCountForList(
+				jobService.listJobExecutionsForJobWithStepCountFilteredByTaskExecutionId(taskExecutionId, getPageOffset(pageable),
+						pageable.getPageSize()));
+	}
+
+	@Override
 	public List<TaskJobExecution> listJobExecutionsForJobWithStepCount(Pageable pageable, String jobName) throws NoSuchJobException {
 		Assert.notNull(pageable, "pageable must not be null");
 		return getTaskJobExecutionsWithStepCountForList(
@@ -181,18 +210,16 @@ public class DefaultTaskJobService implements TaskJobService {
 		}
 
 		TaskExecution taskExecution = this.taskExplorer.getTaskExecution(taskJobExecution.getTaskId());
+		TaskManifest taskManifest = this.taskExecutionService.findTaskManifestById(taskExecution.getExecutionId());
 		TaskDefinition taskDefinition = this.taskDefinitionRepository.findById(taskExecution.getTaskName())
 				.orElseThrow(() -> new NoSuchTaskDefinitionException(taskExecution.getTaskName()));
-
-		String platformName = taskJobExecution.getJobExecution().getJobParameters().getString("-spring.cloud.data.flow.platformname");
+		String platformName = taskManifest.getPlatformName();
 		if (platformName != null) {
 			Map<String, String> deploymentProperties = new HashMap<>();
 			deploymentProperties.put(DefaultTaskExecutionService.TASK_PLATFORM_NAME, platformName);
-			String taskAppName = taskJobExecution.getJobExecution().getJobParameters().getString("-spring.cloud.data.flow.taskappname");
 			taskExecutionService.executeTask(taskDefinition.getName(), deploymentProperties,
 					restartExecutionArgs(taskExecution.getArguments(),
-							taskJobExecution.getJobExecution().getJobParameters()),
-					taskAppName);
+							taskJobExecution.getJobExecution().getJobParameters()));
 		} else {
 			throw new IllegalStateException(String.format("Did not find platform for taskName=[%s] , taskId=[%s]",
 					taskExecution.getTaskName(),taskJobExecution.getTaskId()));
@@ -222,7 +249,9 @@ public class DefaultTaskJobService implements TaskJobService {
 					}
 				}
 				if(!existsFlag) {
-					result.add(String.format("%s(%s)=%s", key, jobParametersMap.get(key).getType().toString().toLowerCase(), jobParameters.getString(key)));
+					result.add(String.format("%s(%s)=%s", key,
+							jobParametersMap.get(key).getType().toString().toLowerCase(),
+							jobParameters.getString(key)));
 				}
 			}
 		}

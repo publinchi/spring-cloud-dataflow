@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 the original author or authors.
+ * Copyright 2018-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,17 +23,21 @@ import java.util.Map;
 
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.jupiter.api.Assertions;
 import org.junit.rules.ExpectedException;
 
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.cloud.dataflow.core.TaskDefinition;
 import org.springframework.cloud.dataflow.core.dsl.TaskNode;
 import org.springframework.cloud.dataflow.core.dsl.TaskParser;
-import org.springframework.cloud.dataflow.server.controller.WhitelistProperties;
+import org.springframework.cloud.dataflow.server.controller.VisibleProperties;
 import org.springframework.cloud.deployer.spi.core.AppDefinition;
 import org.springframework.core.io.Resource;
+import org.springframework.util.StringUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -47,27 +51,26 @@ public class TaskServiceUtilsTests {
 	public static final String BASE_GRAPH = "AAA && BBB";
 
 	@Rule
-	public ExpectedException expectedException = ExpectedException.none();
+	public ExpectedException expectedException;
 
 	@Test
 	public void testCreateComposedTaskDefinition() {
-		TaskConfigurationProperties props = new TaskConfigurationProperties();
-		props.setComposedTaskRunnerName("FOO");
-		assertThat(TaskServiceUtils.createComposedTaskDefinition(BASE_GRAPH, props)).isEqualTo("FOO --graph=\"AAA && BBB\"");
+		assertThat(TaskServiceUtils.createComposedTaskDefinition(BASE_GRAPH)).isEqualTo("composed-task-runner --graph=\"AAA && BBB\"");
 	}
 
 	@Test
 	public void testCreateComposeTaskDefinitionNullNameCheck() {
-		this.expectedException.expect(IllegalArgumentException.class);
-		TaskConfigurationProperties props = new TaskConfigurationProperties();
-		TaskServiceUtils.createComposedTaskDefinition(BASE_GRAPH, props);
-		TaskServiceUtils.createComposedTaskDefinition(null, props);
+		Assertions.assertThrows(IllegalArgumentException.class, () -> {
+			TaskServiceUtils.createComposedTaskDefinition(BASE_GRAPH);
+			TaskServiceUtils.createComposedTaskDefinition(null);
+		});
 	}
 
 	@Test
 	public void testCreateComposeTaskDefinitionNullProperties() {
-		this.expectedException.expect(IllegalArgumentException.class);
-		TaskServiceUtils.createComposedTaskDefinition(BASE_GRAPH, null);
+		Assertions.assertThrows(IllegalArgumentException.class, () -> {
+			TaskServiceUtils.createComposedTaskDefinition(BASE_GRAPH, null);
+		});
 	}
 
 	@Test
@@ -88,20 +91,81 @@ public class TaskServiceUtilsTests {
 	@Test
 	public void testDatabasePropUpdate() {
 		TaskDefinition taskDefinition = new TaskDefinition("testTask", "testApp");
-		DataSourceProperties dataSourceProperties = new DataSourceProperties();
-		dataSourceProperties.setUsername("myUser");
-		dataSourceProperties.setDriverClassName("myDriver");
-		dataSourceProperties.setPassword("myPassword");
-		dataSourceProperties.setUrl("myUrl");
+		DataSourceProperties dataSourceProperties = getDataSourceProperties();
 		TaskDefinition definition = TaskServiceUtils.updateTaskProperties(
 				taskDefinition,
-				dataSourceProperties);
-
+				dataSourceProperties, true);
 		assertThat(definition.getProperties().size()).isEqualTo(5);
 		assertThat(definition.getProperties().get("spring.datasource.url")).isEqualTo("myUrl");
 		assertThat(definition.getProperties().get("spring.datasource.driverClassName")).isEqualTo("myDriver");
 		assertThat(definition.getProperties().get("spring.datasource.username")).isEqualTo("myUser");
 		assertThat(definition.getProperties().get("spring.datasource.password")).isEqualTo("myPassword");
+
+		definition = TaskServiceUtils.updateTaskProperties(
+				taskDefinition,
+				dataSourceProperties, false);
+		assertThat(definition.getProperties().size()).isEqualTo(3);
+		assertThat(definition.getProperties().get("spring.datasource.url")).isEqualTo("myUrl");
+		assertThat(definition.getProperties().get("spring.datasource.driverClassName")).isEqualTo("myDriver");
+	}
+
+	@Test
+	public void testDatabasePropUpdateWithPlatform() {
+		TaskDefinition taskDefinition = new TaskDefinition("testTask", "testApp");
+		DataSourceProperties dataSourceProperties = getDataSourceProperties();
+		TaskDefinition definition = TaskServiceUtils.updateTaskProperties(
+				taskDefinition,
+				dataSourceProperties, false);
+
+		validateProperties(definition, 3);
+		assertThat(definition.getProperties().get("spring.datasource.driverClassName")).isEqualTo("myDriver");
+	}
+
+	@Test
+	public void testDatabasePropUpdateWithPlatformForUserDriverClassName() {
+		TaskDefinition definition = createUpdatedDefinitionForProperty("spring.datasource.driverClassName", "foobar");
+		validateProperties(definition, 2);
+		assertThat(definition.getProperties().get("spring.datasource.driverClassName")).isEqualTo("foobar");
+
+		definition = createUpdatedDefinitionForProperty("spring.datasource.driver-class-name", "feebar");
+		validateProperties(definition, 2);
+		assertThat(definition.getProperties().get("spring.datasource.driver-class-name")).isEqualTo("feebar");
+
+		definition = createUpdatedDefinitionForProperty(null, null);
+		validateProperties(definition, 2);
+		assertThat(definition.getProperties().get("spring.datasource.driverClassName")).isEqualTo("myDriver");
+	}
+
+	@Test
+	public void testDatabasePropUpdateWithPlatformForUrl() {
+		TaskDefinition definition = createUpdatedDefinitionForProperty("spring.datasource.url", "newurl");
+		assertThat(definition.getProperties().get("spring.datasource.url")).isEqualTo("newurl");
+
+		definition = createUpdatedDefinitionForProperty(null, null);
+		assertThat(definition.getProperties().get("spring.datasource.url")).isEqualTo("myUrl");
+	}
+
+	private TaskDefinition createUpdatedDefinitionForProperty(String key, String value) {
+		Map<String, String> props = new HashMap<>();
+		if(StringUtils.hasText(key) && StringUtils.hasText(value)) {
+			props.put(key, value);
+		}
+		TaskDefinition taskDefinition = (new TaskDefinition.TaskDefinitionBuilder()).
+				addProperties(props).
+				setTaskName("testTask").
+				setRegisteredAppName("testApp").
+				build();
+		DataSourceProperties dataSourceProperties = getDataSourceProperties();
+		return TaskServiceUtils.updateTaskProperties(
+				taskDefinition,
+				dataSourceProperties, false);
+	}
+
+	private void validateProperties(TaskDefinition definition, int size) {
+		assertThat(definition.getProperties().size()).isEqualTo(size);
+		assertThat(definition.getProperties().get("spring.datasource.url")).isEqualTo("myUrl");
+		assertThat(definition.getProperties().get("spring.datasource.username")).isNull();
+		assertThat(definition.getProperties().get("spring.datasource.password")).isNull();
 	}
 
 	@Test
@@ -125,15 +189,15 @@ public class TaskServiceUtilsTests {
 		Map<String, String> appDeploymentProperties = new HashMap<>();
 		appDeploymentProperties.put("propA", "valA");
 		appDeploymentProperties.put("propB", "valB");
-		WhitelistProperties whitelistProperties = mock(WhitelistProperties.class);
-		org.mockito.BDDMockito.given(whitelistProperties
+		VisibleProperties visibleProperties = mock(VisibleProperties.class);
+		org.mockito.BDDMockito.given(visibleProperties
 				.qualifyProperties(any(), any()))
 				.willReturn(appDeploymentProperties);
 		AppDefinition appDefinition = TaskServiceUtils.mergeAndExpandAppProperties(
 				taskDefinition,
 				mock(Resource.class),
 				appDeploymentProperties,
-				whitelistProperties);
+				visibleProperties);
 		assertThat(appDefinition.getProperties().size()).isEqualTo(2);
 		assertThat(appDefinition.getProperties().get("propA")).isEqualTo("valA");
 		assertThat(appDefinition.getProperties().get("propB")).isEqualTo("valB");
@@ -177,9 +241,138 @@ public class TaskServiceUtilsTests {
 		assertTrue(!appDeploymentProperties.containsKey("DATAFLOW-SERVER-URI"));
 	}
 
+	@Test
+	public void testAddProvidedImagePullSecret() {
+		ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties =
+				new ComposedTaskRunnerConfigurationProperties();
+		composedTaskRunnerConfigurationProperties.setImagePullSecret("regcred");
+
+		Map<String, String> taskDeploymentProperties = new HashMap<>();
+
+		TaskServiceUtils.addImagePullSecretProperty(taskDeploymentProperties, composedTaskRunnerConfigurationProperties);
+
+		String imagePullSecretPropertyKey = "deployer.composed-task-runner.kubernetes.imagePullSecret";
+
+		assertTrue("Task deployment properties are missing composed task runner imagePullSecret",
+				taskDeploymentProperties.containsKey(imagePullSecretPropertyKey));
+
+		assertEquals("Invalid imagePullSecret", "regcred", taskDeploymentProperties.get(imagePullSecretPropertyKey));
+	}
+
+	@Test
+	public void testComposedTaskRunnerUriFromTaskProps() {
+		ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties =
+				new ComposedTaskRunnerConfigurationProperties();
+		TaskConfigurationProperties taskConfigurationProperties = new TaskConfigurationProperties();
+		taskConfigurationProperties.setComposedTaskRunnerConfigurationProperties(composedTaskRunnerConfigurationProperties);
+		taskConfigurationProperties.setComposedTaskRunnerUri("docker://something");
+
+		String uri = TaskServiceUtils.getComposedTaskLauncherUri(taskConfigurationProperties,
+				composedTaskRunnerConfigurationProperties);
+
+		assertEquals("Invalid task runner URI string", "docker://something", uri);
+	}
+
+	@Test
+	public void testComposedTaskRunnerUriFromCTRProps() {
+		ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties =
+				new ComposedTaskRunnerConfigurationProperties();
+		composedTaskRunnerConfigurationProperties.setUri("docker://something");
+
+		String uri = TaskServiceUtils.getComposedTaskLauncherUri(new TaskConfigurationProperties(),
+				composedTaskRunnerConfigurationProperties);
+
+		assertEquals("Invalid task runner URI string", "docker://something", uri);
+	}
+
+	@Test
+	public void testComposedTaskRunnerUriFromCTRPropsOverridesTaskProps() {
+		ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties =
+				new ComposedTaskRunnerConfigurationProperties();
+		composedTaskRunnerConfigurationProperties.setUri("gcr.io://something");
+
+		TaskConfigurationProperties taskConfigurationProperties = new TaskConfigurationProperties();
+		taskConfigurationProperties.setComposedTaskRunnerConfigurationProperties(composedTaskRunnerConfigurationProperties);
+		taskConfigurationProperties.setComposedTaskRunnerUri("docker://something");
+
+		String uri = TaskServiceUtils.getComposedTaskLauncherUri(taskConfigurationProperties,
+				composedTaskRunnerConfigurationProperties);
+
+		assertEquals("Invalid task runner URI string", "gcr.io://something", uri);
+	}
+
+	@Test
+	public void testImagePullSecretNullCTRProperties() {
+		Map<String, String> taskDeploymentProperties = new HashMap<>();
+		TaskServiceUtils.addImagePullSecretProperty(taskDeploymentProperties, null);
+		assertFalse("Task deployment properties should not contain imagePullSecret",
+				taskDeploymentProperties.containsKey("deployer.composed-task-runner.kubernetes.imagePullSecret"));
+	}
+
+	@Test
+	public void testUseUserAccessTokenFromCTRPropsEnabled() {
+		ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties =
+				new ComposedTaskRunnerConfigurationProperties();
+		composedTaskRunnerConfigurationProperties.setUseUserAccessToken(true);
+
+		boolean result = TaskServiceUtils.isUseUserAccessToken(null, composedTaskRunnerConfigurationProperties);
+
+		assertTrue("Use user access token should be true", result);
+	}
+
+	@Test
+	public void testUseUserAccessTokenFromCTRPropsDisabled() {
+		ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties =
+				new ComposedTaskRunnerConfigurationProperties();
+		composedTaskRunnerConfigurationProperties.setUseUserAccessToken(false);
+
+		boolean result = TaskServiceUtils.isUseUserAccessToken(null, composedTaskRunnerConfigurationProperties);
+
+		assertFalse("Use user access token should be false", result);
+	}
+
+	@Test
+	public void testUseUserAccessTokenFromNullCTRProps() {
+		TaskConfigurationProperties taskConfigurationProperties = new TaskConfigurationProperties();
+		taskConfigurationProperties.setComposedTaskRunnerConfigurationProperties(new ComposedTaskRunnerConfigurationProperties());
+
+		boolean result = TaskServiceUtils.isUseUserAccessToken(taskConfigurationProperties, null);
+
+		assertFalse("Use user access token should be false", result);
+	}
+
+	@Test
+	public void testUseUserAccessTokenFromTaskProps() {
+		TaskConfigurationProperties taskConfigurationProperties = new TaskConfigurationProperties();
+		taskConfigurationProperties.setComposedTaskRunnerConfigurationProperties(new ComposedTaskRunnerConfigurationProperties());
+		taskConfigurationProperties.setUseUserAccessToken(true);
+
+		boolean result = TaskServiceUtils.isUseUserAccessToken(taskConfigurationProperties, null);
+
+		assertTrue("Use user access token should be true", result);
+	}
+
+	@Test
+	public void testUseUserAccessTokenFromTaskPropsDefault() {
+		TaskConfigurationProperties taskConfigurationProperties = new TaskConfigurationProperties();
+		taskConfigurationProperties.setComposedTaskRunnerConfigurationProperties(new ComposedTaskRunnerConfigurationProperties());
+
+		boolean result = TaskServiceUtils.isUseUserAccessToken(taskConfigurationProperties, null);
+
+		assertFalse("Use user access token should be false", result);
+	}
 
 	private TaskNode parse(String dsltext) {
 		TaskNode ctn = new TaskParser("test", dsltext, true, true).parse();
 		return ctn;
+	}
+
+	private DataSourceProperties getDataSourceProperties() {
+		DataSourceProperties dataSourceProperties = new DataSourceProperties();
+		dataSourceProperties.setUsername("myUser");
+		dataSourceProperties.setDriverClassName("myDriver");
+		dataSourceProperties.setPassword("myPassword");
+		dataSourceProperties.setUrl("myUrl");
+		return dataSourceProperties;
 	}
 }

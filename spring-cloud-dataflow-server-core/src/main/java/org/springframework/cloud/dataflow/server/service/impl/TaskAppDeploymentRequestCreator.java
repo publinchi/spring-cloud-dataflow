@@ -28,7 +28,7 @@ import org.springframework.cloud.dataflow.configuration.metadata.ApplicationConf
 import org.springframework.cloud.dataflow.core.TaskDefinition;
 import org.springframework.cloud.dataflow.rest.util.DeploymentPropertiesUtils;
 import org.springframework.cloud.dataflow.server.config.apps.CommonApplicationProperties;
-import org.springframework.cloud.dataflow.server.controller.WhitelistProperties;
+import org.springframework.cloud.dataflow.server.controller.VisibleProperties;
 import org.springframework.cloud.deployer.spi.core.AppDefinition;
 import org.springframework.cloud.deployer.spi.core.AppDeploymentRequest;
 import org.springframework.cloud.task.repository.TaskExecution;
@@ -54,7 +54,7 @@ public class TaskAppDeploymentRequestCreator {
 
 	private final CommonApplicationProperties commonApplicationProperties;
 
-	private final WhitelistProperties whitelistProperties;
+	private final VisibleProperties visibleProperties;
 
 	private final String dataflowServerUri;
 
@@ -72,10 +72,9 @@ public class TaskAppDeploymentRequestCreator {
 		Assert.notNull(metaDataResolver, "metaDataResolver must not be null");
 
 		this.commonApplicationProperties = commonApplicationProperties;
-		this.whitelistProperties = new WhitelistProperties(metaDataResolver);
+		this.visibleProperties = new VisibleProperties(metaDataResolver);
 		this.dataflowServerUri = dataflowServerUri;
 	}
-
 
 
 	/**
@@ -93,31 +92,43 @@ public class TaskAppDeploymentRequestCreator {
 			TaskExecution taskExecution,
 			TaskExecutionInformation taskExecutionInformation,
 			List<String> commandLineArgs,
-			String platformName) {
+			String platformName,
+			String platformType) {
 		TaskDefinition taskDefinition = taskExecutionInformation.getTaskDefinition();
 		String registeredAppName = taskDefinition.getRegisteredAppName();
 		Map<String, String> appDeploymentProperties = new HashMap<>(commonApplicationProperties.getTask());
 		appDeploymentProperties.putAll(
 				TaskServiceUtils.extractAppProperties(
-						taskExecutionInformation.isComposed()? "composed-task-runner" : registeredAppName,
+						taskExecutionInformation.isComposed() ? "composed-task-runner" : registeredAppName,
 						taskExecutionInformation.getTaskDeploymentProperties()));
+
+		// Merge the common properties defined via the spring.cloud.dataflow.common-properties.task-resource file.
+		// Doesn't override existing properties!
+		// The placeholders defined in the task-resource file are not resolved by SCDF but passed to the apps as they are.
+		TaskServiceUtils.contributeCommonProperties(this.commonApplicationProperties.getTaskResourceProperties(),
+				appDeploymentProperties, "common");
+		TaskServiceUtils.contributeCommonProperties(this.commonApplicationProperties.getTaskResourceProperties(),
+				appDeploymentProperties, platformType);
 
 		// Need to keep all properties around, not just 'deployer.*'
 		// as those are a source to restore app specific props
 		Map<String, String> deployerDeploymentProperties = DeploymentPropertiesUtils
-			.qualifyDeployerProperties(taskExecutionInformation.getTaskDeploymentProperties(),
-					taskExecutionInformation.isComposed()? "composed-task-runner" : registeredAppName);
+				.qualifyDeployerProperties(taskExecutionInformation.getTaskDeploymentProperties(),
+						taskExecutionInformation.isComposed() ? "composed-task-runner" : registeredAppName);
 
 		if (StringUtils.hasText(this.dataflowServerUri) && taskExecutionInformation.isComposed()) {
 			TaskServiceUtils.updateDataFlowUriIfNeeded(this.dataflowServerUri, appDeploymentProperties,
 					commandLineArgs);
 		}
+		if (taskExecutionInformation.isComposed()) {
+			appDeploymentProperties.put("platform-name", platformName);
+		}
 		AppDefinition revisedDefinition = TaskServiceUtils.mergeAndExpandAppProperties(taskDefinition,
 				taskExecutionInformation.getMetadataResource(),
-				appDeploymentProperties, this.whitelistProperties);
+				appDeploymentProperties, this.visibleProperties);
 
-		List<String> updatedCmdLineArgs = (taskExecutionInformation.isComposed())?this.updateCommandLineArgs(commandLineArgs,
-				taskExecution, platformName, registeredAppName):this.updateCommandLineArgs(commandLineArgs,
+		List<String> updatedCmdLineArgs = (taskExecutionInformation.isComposed()) ? this.updateCommandLineArgs(commandLineArgs,
+				taskExecution, platformName, registeredAppName) : this.updateCommandLineArgs(commandLineArgs,
 				taskExecution, platformName);
 		AppDeploymentRequest request = new AppDeploymentRequest(revisedDefinition,
 				taskExecutionInformation.getAppResource(),
@@ -127,26 +138,23 @@ public class TaskAppDeploymentRequestCreator {
 				+ request.getDefinition().toString());
 		return request;
 	}
+
 	private List<String> updateCommandLineArgs(List<String> commandLineArgs, TaskExecution taskExecution, String platformName) {
 		List<String> results = new ArrayList();
 		commandLineArgs.stream()
-				.filter(arg -> !arg.startsWith(TASK_EXECUTION_KEY)
-						&& !arg.startsWith(PLATFORM_NAME_KEY))
+				.filter(arg -> !arg.startsWith(TASK_EXECUTION_KEY))
 				.forEach(results::add);
-
-		results.add(PLATFORM_NAME_KEY + platformName);
 		results.add(TASK_EXECUTION_KEY + taskExecution.getExecutionId());
 		return results;
 	}
+
 	private List<String> updateCommandLineArgs(List<String> commandLineArgs, TaskExecution taskExecution, String platformName, String appName) {
 		List<String> results = new ArrayList();
 		commandLineArgs.stream()
 				.filter(arg -> !arg.startsWith(TASK_EXECUTION_KEY)
-						&& !arg.startsWith(PLATFORM_NAME_KEY)
 						&& !arg.startsWith(TASK_EXECUTION_APP_NAME))
 				.forEach(results::add);
 
-		results.add(PLATFORM_NAME_KEY + platformName);
 		results.add(TASK_EXECUTION_KEY + taskExecution.getExecutionId());
 		results.add(TASK_EXECUTION_APP_NAME + appName);
 		return results;

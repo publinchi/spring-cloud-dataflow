@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 the original author or authors.
+ * Copyright 2015-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -57,8 +57,6 @@ import org.springframework.cloud.dataflow.core.TaskPlatform;
 import org.springframework.cloud.dataflow.core.TaskPlatformFactory;
 import org.springframework.cloud.dataflow.registry.service.AppRegistryService;
 import org.springframework.cloud.dataflow.server.configuration.TaskServiceDependencies;
-import org.springframework.cloud.dataflow.server.controller.InvalidCTRLaunchRequestException;
-import org.springframework.cloud.dataflow.server.controller.NoSuchAppException;
 import org.springframework.cloud.dataflow.server.job.LauncherRepository;
 import org.springframework.cloud.dataflow.server.repository.DataflowTaskExecutionDao;
 import org.springframework.cloud.dataflow.server.repository.DataflowTaskExecutionMetadataDao;
@@ -80,6 +78,7 @@ import org.springframework.cloud.deployer.spi.core.AppDeploymentRequest;
 import org.springframework.cloud.deployer.spi.task.LaunchState;
 import org.springframework.cloud.deployer.spi.task.TaskLauncher;
 import org.springframework.cloud.deployer.spi.task.TaskStatus;
+import org.springframework.cloud.task.listener.TaskException;
 import org.springframework.cloud.task.repository.TaskExecution;
 import org.springframework.cloud.task.repository.TaskExplorer;
 import org.springframework.cloud.task.repository.TaskRepository;
@@ -90,6 +89,7 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.junit4.SpringRunner;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.util.StringUtils;
 
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.core.Is.is;
@@ -116,6 +116,7 @@ import static org.mockito.Mockito.when;
  * @author Gunnar Hillert
  * @author Daniel Serleg
  * @author David Turanski
+ * @author Chris Schaefer
  */
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = { TaskServiceDependencies.class }, properties = {
@@ -131,6 +132,10 @@ public abstract class DefaultTaskExecutionServiceTests {
 	private final static String BASE_TASK_NAME = "myTask";
 
 	private final static String TASK_NAME_ORIG = BASE_TASK_NAME + "_ORIG";
+
+	private final static String K8_PLATFORM = "k8platform";
+
+	private final static String FAKE_PLATFORM = "fakeplatformname";
 
 	@Autowired
 	TaskRepository taskRepository;
@@ -194,28 +199,86 @@ public abstract class DefaultTaskExecutionServiceTests {
 
 		@Before
 		public void setup() {
-			// not adding platform name as default as we want to check that this only one
-			// gets replaced
-			this.launcherRepository.save(new Launcher("fakeplatformname", "local", taskLauncher));
-			taskDefinitionRepository.save(new TaskDefinition(TASK_NAME_ORIG, "demo"));
-			taskDefinitionRepository.findAll();
-			JdbcTemplate template = new JdbcTemplate(this.dataSource);
-			template.execute("DELETE FROM TASK_EXECUTION_PARAMS");
-			template.execute("DELETE FROM TASK_EXECUTION;");
+			setupTest(dataSource);
 		}
 
 		@Test
 		@DirtiesContext
 		public void executeSingleTaskDefaultsToExistingSinglePlatformTest() {
 			initializeSuccessfulRegistry(appRegistry);
-			when(taskLauncher.launch(any())).thenReturn("0");
-			assertEquals(1L, this.taskExecutionService.executeTask(TASK_NAME_ORIG, new HashMap<>(), new LinkedList<>()));
+			ArgumentCaptor<AppDeploymentRequest> argument = ArgumentCaptor.forClass(AppDeploymentRequest.class);
+			when(taskLauncher.launch(argument.capture())).thenReturn("0");
+			validateBasicProperties(Collections.emptyMap(), argument, FAKE_PLATFORM);
+		}
 
+		@Test
+		@DirtiesContext
+		public void executeSingleTaskDefaultsToExistingSinglePlatformTestForKubernetes() {
+			this.launcherRepository.save(new Launcher(K8_PLATFORM, "Kubernetes", taskLauncher));
+			initializeSuccessfulRegistry(appRegistry);
+			ArgumentCaptor<AppDeploymentRequest> argument = ArgumentCaptor.forClass(AppDeploymentRequest.class);
+			when(taskLauncher.launch(argument.capture())).thenReturn("0");
+			Map<String, String> taskDeploymentProperties = new HashMap<>();
+			taskDeploymentProperties.put("spring.cloud.dataflow.task.platformName", K8_PLATFORM);
+			validateBasicProperties(taskDeploymentProperties, argument, K8_PLATFORM);
+		}
+
+		private void validateBasicProperties(Map<String, String> taskDeploymentProperties,
+				ArgumentCaptor<AppDeploymentRequest> argument,
+				String platform) {
+			assertEquals(1L, this.taskExecutionService.executeTask(TASK_NAME_ORIG,
+					taskDeploymentProperties, new LinkedList<>()));
+			AppDeploymentRequest appDeploymentRequest = argument.getValue();
+			assertTrue(appDeploymentRequest.getDefinition().getProperties().containsKey("spring.datasource.username"));
 			TaskDeployment taskDeployment = taskDeploymentRepository.findByTaskDeploymentId("0");
 			assertNotNull("TaskDeployment should not be null", taskDeployment);
 			assertEquals("0", taskDeployment.getTaskDeploymentId());
 			assertEquals(TASK_NAME_ORIG, taskDeployment.getTaskDefinitionName());
-			assertEquals("fakeplatformname", taskDeployment.getPlatformName());
+			assertEquals(platform, taskDeployment.getPlatformName());
+			assertNotNull("TaskDeployment createdOn field should not be null", taskDeployment.getCreatedOn());
+		}
+	}
+
+	public void setupTest(DataSource dataSource) {
+		this.launcherRepository.save(new Launcher(FAKE_PLATFORM, "local", taskLauncher));
+		this.taskDefinitionRepository.save(new TaskDefinition(TASK_NAME_ORIG, "demo"));
+		taskDefinitionRepository.findAll();
+		JdbcTemplate template = new JdbcTemplate(dataSource);
+		template.execute("DELETE FROM TASK_EXECUTION_PARAMS");
+		template.execute("DELETE FROM TASK_EXECUTION;");
+	}
+
+	@AutoConfigureTestDatabase(replace = Replace.ANY)
+	@TestPropertySource(properties = { "spring.cloud.dataflow.task.use-kubernetes-secrets-for-db-credentials=true" })
+	public static class SimpleDefaultPlatformForKubernetesTests extends DefaultTaskExecutionServiceTests {
+
+		@Autowired
+		DataSource dataSource;
+
+		@Before
+		public void setup() {
+			setupTest(dataSource);
+			this.launcherRepository.save(new Launcher(K8_PLATFORM, "Kubernetes", taskLauncher));
+		}
+
+		@Test
+		@DirtiesContext
+		public void executeSingleTaskDefaultsToExistingSinglePlatformTestForKubernetes() {
+			final String K8_PLATFORM = "k8platform";
+			initializeSuccessfulRegistry(appRegistry);
+			ArgumentCaptor<AppDeploymentRequest> argument = ArgumentCaptor.forClass(AppDeploymentRequest.class);
+			when(taskLauncher.launch(argument.capture())).thenReturn("0");
+			Map<String, String> taskDeploymentProperties = new HashMap<>();
+			taskDeploymentProperties.put("spring.cloud.dataflow.task.platformName", K8_PLATFORM);
+			assertEquals(1L, this.taskExecutionService.executeTask(TASK_NAME_ORIG,
+					taskDeploymentProperties, new LinkedList<>()));
+			AppDeploymentRequest appDeploymentRequest = argument.getValue();
+			assertFalse(appDeploymentRequest.getDefinition().getProperties().containsKey("spring.datasource.username"));
+			TaskDeployment taskDeployment = taskDeploymentRepository.findByTaskDeploymentId("0");
+			assertNotNull("TaskDeployment should not be null", taskDeployment);
+			assertEquals("0", taskDeployment.getTaskDeploymentId());
+			assertEquals(TASK_NAME_ORIG, taskDeployment.getTaskDefinitionName());
+			assertEquals(K8_PLATFORM, taskDeployment.getPlatformName());
 			assertNotNull("TaskDeployment createdOn field should not be null", taskDeployment.getCreatedOn());
 		}
 	}
@@ -448,7 +511,7 @@ public abstract class DefaultTaskExecutionServiceTests {
 
 			verify(this.taskLauncher, times(0)).destroy(TASK_NAME_ORIG);
 		}
-		
+
 		private void setupUpgradeForCommandLineArgsChange() throws IOException {
 			 TaskExecution myTask = this.taskRepository.createTaskExecution(TASK_NAME_ORIG);
 			 TaskManifest manifest = new TaskManifest();
@@ -469,12 +532,12 @@ public abstract class DefaultTaskExecutionServiceTests {
 
 			 this.taskExecutionService.executeTask(TASK_NAME_ORIG, deploymentProperties, Collections.singletonList("--foo=bar"));
 			 TaskManifest lastManifest = this.dataflowTaskExecutionMetadataDao.getLatestManifest(TASK_NAME_ORIG);
-			 assertEquals(3, lastManifest.getTaskDeploymentRequest().getCommandlineArguments().size());
+			 assertEquals(2, lastManifest.getTaskDeploymentRequest().getCommandlineArguments().size());
 			 assertEquals("--foo=bar", lastManifest.getTaskDeploymentRequest().getCommandlineArguments().get(0));
 
 			 this.taskExecutionService.executeTask(TASK_NAME_ORIG, deploymentProperties, Collections.emptyList());
 			 lastManifest = this.dataflowTaskExecutionMetadataDao.getLatestManifest(TASK_NAME_ORIG);
-			 assertEquals(2, lastManifest.getTaskDeploymentRequest().getCommandlineArguments().size());
+			 assertEquals(1, lastManifest.getTaskDeploymentRequest().getCommandlineArguments().size());
 		 }
 
 		@Test
@@ -509,7 +572,7 @@ public abstract class DefaultTaskExecutionServiceTests {
 
 			assertEquals("file:src/test/resources/apps/foo-task", lastManifest.getTaskDeploymentRequest().getResource().getURL().toString());
 			assertEquals("default", lastManifest.getPlatformName());
-			assertEquals(5, lastManifest.getTaskDeploymentRequest().getDefinition().getProperties().size());
+			assertEquals(7, lastManifest.getTaskDeploymentRequest().getDefinition().getProperties().size());
 			assertEquals("bar", lastManifest.getTaskDeploymentRequest().getDefinition().getProperties().get("foo"));
 		}
 
@@ -556,21 +619,6 @@ public abstract class DefaultTaskExecutionServiceTests {
 			initializeSuccessfulRegistry(appRegistry);
 			when(taskLauncher.launch(any())).thenReturn("0");
 			assertEquals(1L, this.taskExecutionService.executeTask(TASK_NAME_ORIG, new HashMap<>(), new LinkedList<>()));
-
-			TaskDeployment taskDeployment = taskDeploymentRepository.findByTaskDeploymentId("0");
-			assertNotNull("TaskDeployment should not be null", taskDeployment);
-			assertEquals("0", taskDeployment.getTaskDeploymentId());
-			assertEquals(TASK_NAME_ORIG, taskDeployment.getTaskDefinitionName());
-			assertEquals("default", taskDeployment.getPlatformName());
-			assertNotNull("TaskDeployment createdOn field should not be null", taskDeployment.getCreatedOn());
-		}
-
-		@Test(expected = InvalidCTRLaunchRequestException.class)
-		@DirtiesContext
-		public void executeSingleTaskTestWithCtrNameSpecified() {
-			initializeSuccessfulRegistry(appRegistry);
-			when(taskLauncher.launch(any())).thenReturn("0");
-			this.taskExecutionService.executeTask(TASK_NAME_ORIG, new HashMap<>(), new LinkedList<>(), "anotherctr");
 
 			TaskDeployment taskDeployment = taskDeploymentRepository.findByTaskDeploymentId("0");
 			assertNotNull("TaskDeployment should not be null", taskDeployment);
@@ -773,16 +821,21 @@ public abstract class DefaultTaskExecutionServiceTests {
 		public void executeTaskWithNullDefinitionTest() {
 			boolean errorCaught = false;
 			when(this.taskLauncher.launch(any())).thenReturn("0");
+			TaskConfigurationProperties taskConfigurationProperties = new TaskConfigurationProperties();
+			ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties =
+					new ComposedTaskRunnerConfigurationProperties();
 			TaskExecutionInfoService taskExecutionInfoService = new DefaultTaskExecutionInfoService(
 					this.dataSourceProperties, this.appRegistry, this.taskExplorer,
-					mock(TaskDefinitionRepository.class), new TaskConfigurationProperties(),
-					mock(LauncherRepository.class), Collections.singletonList(mock(TaskPlatform.class)));
+					mock(TaskDefinitionRepository.class), taskConfigurationProperties,
+					mock(LauncherRepository.class), Collections.singletonList(mock(TaskPlatform.class)),
+					composedTaskRunnerConfigurationProperties);
 			TaskExecutionService taskExecutionService = new DefaultTaskExecutionService(
 					launcherRepository, auditRecordService, taskRepository,
 					taskExecutionInfoService, mock(TaskDeploymentRepository.class),
 					taskExecutionRepositoryService, taskAppDeploymentRequestCreator,
 					this.taskExplorer, this.dataflowTaskExecutionDao, this.dataflowTaskExecutionMetadataDao,
-					mock(OAuth2TokenUtilsService.class), this.taskSaveService);
+					mock(OAuth2TokenUtilsService.class), this.taskSaveService, taskConfigurationProperties,
+					composedTaskRunnerConfigurationProperties);
 			try {
 				taskExecutionService.executeTask(TASK_NAME_ORIG, new HashMap<>(), new LinkedList<>());
 			}
@@ -819,6 +872,26 @@ public abstract class DefaultTaskExecutionServiceTests {
 			taskSaveService.saveTaskDefinition(new TaskDefinition("simpleTask", "AAA --foo=bar"));
 			ValidationStatus validationStatus = taskValidationService.validateTask("simpleTask");
 			assertEquals("invalid", validationStatus.getAppsStatuses().get("task:simpleTask"));
+		}
+
+		@Test
+		@DirtiesContext
+		public void validateInvalidTaskNameTest() {
+			String[] taskNames = { "$task", "task$", "ta_sk" };
+
+			for (String taskName : taskNames) {
+				try {
+					initializeSuccessfulRegistry(appRegistry);
+					taskSaveService.saveTaskDefinition(new TaskDefinition(taskName, "AAA --foo=bar"));
+
+					fail("Expected TaskException");
+				} catch (Exception e) {
+					assertTrue(e instanceof TaskException);
+					assertEquals(e.getMessage(), "Task name must consist of alphanumeric characters or '-', start " +
+							"with an alphabetic character, and end with an alphanumeric character (e.g. 'my-name', " +
+							" or 'abc-123')");
+				}
+			}
 		}
 
 		@Test
@@ -893,22 +966,7 @@ public abstract class DefaultTaskExecutionServiceTests {
 		@Test
 		@DirtiesContext
 		public void executeComposedTask() {
-			String dsl = "AAA && BBB";
-			initializeSuccessfulRegistry(appRegistry);
-
-			taskSaveService.saveTaskDefinition(new TaskDefinition("seqTask", dsl));
-			when(taskLauncher.launch(any())).thenReturn("0");
-			when(appRegistry.appExist(anyString(), any(ApplicationType.class))).thenReturn(true);
-			Map<String, String> properties = new HashMap<>();
-			properties.put("app.foo", "bar");
-			properties.put("app.seqTask.AAA.timestamp.format", "YYYY");
-			properties.put("deployer.seqTask.AAA.memory", "1240m");
-			properties.put("app.composed-task-runner.interval-time-between-checks", "1000");
-			assertEquals(1L, this.taskExecutionService.executeTask("seqTask", properties, new LinkedList<>()));
-			ArgumentCaptor<AppDeploymentRequest> argumentCaptor = ArgumentCaptor.forClass(AppDeploymentRequest.class);
-			verify(this.taskLauncher, atLeast(1)).launch(argumentCaptor.capture());
-
-			AppDeploymentRequest request = argumentCaptor.getValue();
+			AppDeploymentRequest request = prepComposedTaskRunner(null);
 			assertEquals("seqTask", request.getDefinition().getProperties().get("spring.cloud.task.name"));
 			assertTrue(request.getDefinition().getProperties().containsKey("composed-task-properties"));
 			assertEquals(
@@ -919,13 +977,54 @@ public abstract class DefaultTaskExecutionServiceTests {
 			assertFalse(request.getDefinition().getProperties().containsKey("app.foo"));
 			assertEquals("globalvalue", request.getDefinition().getProperties().get("globalkey"));
 			assertNull(request.getDefinition().getProperties().get("globalstreamkey"));
+			assertEquals("default", request.getDefinition().getProperties().get("platform-name"));
+		}
+
+		@Test
+		@DirtiesContext
+		public void executeComposedTaskNewPlatform() {
+			AppDeploymentRequest request = prepComposedTaskRunner("MyPlatform");
+			assertEquals("seqTask", request.getDefinition().getProperties().get("spring.cloud.task.name"));
+			assertTrue(request.getDefinition().getProperties().containsKey("composed-task-properties"));
+			assertEquals(
+					"app.seqTask-AAA.app.AAA.timestamp.format=YYYY, deployer.seqTask-AAA.deployer.AAA.memory=1240m",
+					request.getDefinition().getProperties().get("composed-task-properties"));
+			assertTrue(request.getDefinition().getProperties().containsKey("interval-time-between-checks"));
+			assertEquals("1000", request.getDefinition().getProperties().get("interval-time-between-checks"));
+			assertFalse(request.getDefinition().getProperties().containsKey("app.foo"));
+			assertEquals("globalvalue", request.getDefinition().getProperties().get("globalkey"));
+			assertNull(request.getDefinition().getProperties().get("globalstreamkey"));
+			assertEquals("MyPlatform", request.getDefinition().getProperties().get("platform-name"));
+		}
+
+		private AppDeploymentRequest prepComposedTaskRunner(String platformName) {
+			String dsl = "AAA && BBB";
+			initializeSuccessfulRegistry(appRegistry);
+
+			taskSaveService.saveTaskDefinition(new TaskDefinition("seqTask", dsl));
+			when(taskLauncher.launch(any())).thenReturn("0");
+			when(appRegistry.appExist(anyString(), any(ApplicationType.class))).thenReturn(true);
+			Map<String, String> properties = new HashMap<>();
+			if(StringUtils.hasText(platformName)) {
+				properties.put("spring.cloud.dataflow.task.platformName", platformName);
+			}
+			properties.put("app.foo", "bar");
+			properties.put("app.seqTask.AAA.timestamp.format", "YYYY");
+			properties.put("deployer.seqTask.AAA.memory", "1240m");
+			properties.put("app.composed-task-runner.interval-time-between-checks", "1000");
+			assertEquals(1L, this.taskExecutionService.executeTask("seqTask", properties, new LinkedList<>()));
+			ArgumentCaptor<AppDeploymentRequest> argumentCaptor = ArgumentCaptor.forClass(AppDeploymentRequest.class);
+			verify(this.taskLauncher, atLeast(1)).launch(argumentCaptor.capture());
+			return argumentCaptor.getValue();
 		}
 
 		@Test
 		@DirtiesContext
 		public void executeComposedTaskWithAccessTokenDisabled1() {
 			initializeSuccessfulRegistry(appRegistry);
-			AppDeploymentRequest request = getAppDeploymentRequestForToken(prepareEnvironmentForTokenTests(), Collections.emptyList());
+			AppDeploymentRequest request = getAppDeploymentRequestForToken(prepareEnvironmentForTokenTests(this.taskSaveService,
+					this.taskLauncher, this.appRegistry), Collections.emptyList(),
+					this.taskExecutionService, this.taskLauncher);
 			assertFalse("Should not contain the property 'dataflow-server-access-token'",
 				request.getDefinition().getProperties().containsKey("dataflow-server-access-token"));
 		}
@@ -937,7 +1036,9 @@ public abstract class DefaultTaskExecutionServiceTests {
 
 			final List<String> arguments = new ArrayList<>();
 			arguments.add("--dataflow-server-use-user-access-token=false");
-			AppDeploymentRequest request = getAppDeploymentRequestForToken(prepareEnvironmentForTokenTests(), Collections.emptyList());
+			AppDeploymentRequest request = getAppDeploymentRequestForToken(prepareEnvironmentForTokenTests(this.taskSaveService,
+					this.taskLauncher, this.appRegistry), Collections.emptyList(),
+					this.taskExecutionService, this.taskLauncher);
 			assertFalse("Should not contain the property 'dataflow-server-access-token'",
 				request.getDefinition().getProperties().containsKey("dataflow-server-access-token"));
 		}
@@ -949,7 +1050,9 @@ public abstract class DefaultTaskExecutionServiceTests {
 
 			final List<String> arguments = new ArrayList<>();
 			arguments.add("--dataflow-server-use-user-access-token=true");
-			AppDeploymentRequest request = getAppDeploymentRequestForToken(prepareEnvironmentForTokenTests(), arguments);
+			AppDeploymentRequest request = getAppDeploymentRequestForToken(prepareEnvironmentForTokenTests(this.taskSaveService,
+					this.taskLauncher, this.appRegistry), arguments,  this.taskExecutionService,
+					this.taskLauncher);
 			assertTrue("Should contain the property 'dataflow-server-access-token'",
 				request.getDefinition().getProperties().containsKey("dataflow-server-access-token"));
 			assertEquals("foo-bar-123-token", request.getDefinition().getProperties().get("dataflow-server-access-token"));
@@ -962,7 +1065,10 @@ public abstract class DefaultTaskExecutionServiceTests {
 
 			final List<String> arguments = new ArrayList<>();
 			arguments.add("--dataflow-server-use-user-access-token =  true");
-			AppDeploymentRequest request = getAppDeploymentRequestForToken(prepareEnvironmentForTokenTests(), arguments);
+			AppDeploymentRequest request = getAppDeploymentRequestForToken(
+					prepareEnvironmentForTokenTests(this.taskSaveService,
+					this.taskLauncher, this.appRegistry), arguments,
+					this.taskExecutionService, this.taskLauncher);
 			assertTrue("Should contain the property 'dataflow-server-access-token'",
 				request.getDefinition().getProperties().containsKey("dataflow-server-access-token"));
 			assertEquals("foo-bar-123-token", request.getDefinition().getProperties().get("dataflow-server-access-token"));
@@ -973,10 +1079,12 @@ public abstract class DefaultTaskExecutionServiceTests {
 		public void executeComposedTaskWithAccessTokenOverrideAsProperty() {
 			initializeSuccessfulRegistry(appRegistry);
 
-			Map<String, String> properties = prepareEnvironmentForTokenTests();
+			Map<String, String> properties = prepareEnvironmentForTokenTests(this.taskSaveService,
+					this.taskLauncher, this.appRegistry);
 			properties.put("app.composed-task-runner.dataflow-server-access-token", "foo-bar-123-token-override");
 
-			AppDeploymentRequest request = getAppDeploymentRequestForToken(properties, Collections.emptyList());
+			AppDeploymentRequest request = getAppDeploymentRequestForToken(properties, Collections.emptyList(),
+					this.taskExecutionService, this.taskLauncher);
 
 			assertTrue("Should contain the property 'dataflow-server-access-token'",
 				request.getDefinition().getProperties().containsKey("dataflow-server-access-token"));
@@ -999,7 +1107,9 @@ public abstract class DefaultTaskExecutionServiceTests {
 
 			List<String> args = Collections.singletonList("--dataflow-server-access-token=foo-bar-123-token-override");
 
-			AppDeploymentRequest request = getAppDeploymentRequestForToken(prepareEnvironmentForTokenTests(), args);
+			AppDeploymentRequest request = getAppDeploymentRequestForToken(prepareEnvironmentForTokenTests(this.taskSaveService,
+					this.taskLauncher, this.appRegistry), args,  this.taskExecutionService,
+					this.taskLauncher);
 
 			assertFalse("Should not contain the property 'dataflow-server-access-token'",
 				request.getDefinition().getProperties().containsKey("dataflow-server-access-token"));
@@ -1018,46 +1128,6 @@ public abstract class DefaultTaskExecutionServiceTests {
 			assertEquals("--dataflow-server-access-token=foo-bar-123-token-override", argumentValue);
 		}
 
-
-		private Map<String, String> prepareEnvironmentForTokenTests() {
-			taskSaveService.saveTaskDefinition(new TaskDefinition("seqTask", "AAA && BBB"));
-			when(taskLauncher.launch(any())).thenReturn("0");
-			when(appRegistry.appExist(anyString(), any(ApplicationType.class))).thenReturn(true);
-			Map<String, String> properties = new HashMap<>();
-			properties.put("app.foo", "bar");
-			properties.put("app.seqTask.AAA.timestamp.format", "YYYY");
-			properties.put("deployer.seqTask.AAA.memory", "1240m");
-			properties.put("app.composed-task-runner.interval-time-between-checks", "1000");
-			return properties;
-		}
-
-		private AppDeploymentRequest getAppDeploymentRequestForToken(Map<String, String> taskDeploymentProperties, List<String> commandLineArgs) {
-			assertEquals(1L, this.taskExecutionService.executeTask("seqTask", taskDeploymentProperties, commandLineArgs));
-
-			ArgumentCaptor<AppDeploymentRequest> argumentCaptor = ArgumentCaptor.forClass(AppDeploymentRequest.class);
-			verify(this.taskLauncher, atLeast(1)).launch(argumentCaptor.capture());
-
-			final AppDeploymentRequest request = argumentCaptor.getValue();
-
-			return request;
-		}
-
-		@Test(expected = NoSuchAppException.class)
-		@DirtiesContext
-		public void executeComposedTaskwithUserCTRNameInvalidAppName() {
-			String dsl = "AAA && BBB";
-			initializeSuccessfulRegistry(appRegistry);
-
-			taskSaveService.saveTaskDefinition(new TaskDefinition("seqTask", dsl));
-			when(taskLauncher.launch(any())).thenReturn("0");
-			Map<String, String> properties = new HashMap<>();
-			properties.put("app.foo", "bar");
-			properties.put("app.seqTask.AAA.timestamp.format", "YYYY");
-			properties.put("deployer.seqTask.AAA.memory", "1240m");
-			properties.put("app.composed-task-runner.interval-time-between-checks", "1000");
-			this.taskExecutionService.executeTask("seqTask", properties, new LinkedList<>(), "anotherctr");
-		}
-
 		@Test
 		@DirtiesContext
 		public void executeComposedTaskwithUserCTRName() {
@@ -1073,14 +1143,14 @@ public abstract class DefaultTaskExecutionServiceTests {
 			properties.put("app.seqTask.AAA.timestamp.format", "YYYY");
 			properties.put("deployer.seqTask.AAA.memory", "1240m");
 			properties.put("app.composed-task-runner.interval-time-between-checks", "1000");
-			assertEquals(1L, this.taskExecutionService.executeTask("seqTask", properties, new LinkedList<>(),"anotherctr"));
+			assertEquals(1L, this.taskExecutionService.executeTask("seqTask", properties, new LinkedList<>()));
 			ArgumentCaptor<AppDeploymentRequest> argumentCaptor = ArgumentCaptor.forClass(AppDeploymentRequest.class);
 			verify(this.taskLauncher, atLeast(1)).launch(argumentCaptor.capture());
 
 			AppDeploymentRequest request = argumentCaptor.getValue();
 			assertEquals("seqTask", request.getDefinition().getProperties().get("spring.cloud.task.name"));
 			assertTrue(request.getDefinition().getProperties().containsKey("composed-task-properties"));
-			assertEquals(request.getCommandlineArguments().get(2),"--spring.cloud.data.flow.taskappname=anotherctr");
+			assertEquals(request.getCommandlineArguments().get(1),"--spring.cloud.data.flow.taskappname=composed-task-runner");
 			assertEquals(
 					"app.seqTask-AAA.app.AAA.timestamp.format=YYYY, deployer.seqTask-AAA.deployer.AAA.memory=1240m",
 					request.getDefinition().getProperties().get("composed-task-properties"));
@@ -1340,7 +1410,79 @@ public abstract class DefaultTaskExecutionServiceTests {
 		}
 	}
 
-	private static void initializeSuccessfulRegistry(AppRegistryService appRegistry) {
+	@TestPropertySource(properties = { "spring.cloud.dataflow.applicationProperties.task.globalkey=globalvalue",
+			"spring.cloud.dataflow.applicationProperties.stream.globalstreamkey=nothere",
+			"spring.cloud.dataflow.task.useUserAccessToken=true"})
+	@AutoConfigureTestDatabase(replace = Replace.ANY)
+	public static class ComposedTaskWithSystemUseUserAccessTokenTests extends DefaultTaskExecutionServiceTests {
+
+		@Autowired
+		TaskRepository taskExecutionRepository;
+
+		@Autowired
+		DataSourceProperties dataSourceProperties;
+
+		@Autowired
+		private AppRegistryService appRegistry;
+
+		@Autowired
+		private TaskLauncher taskLauncher;
+
+		@Autowired
+		private LauncherRepository launcherRepository;
+
+		@Autowired
+		private TaskExecutionService taskExecutionService;
+
+		@Before
+		public void setupMocks() {
+			this.launcherRepository.save(new Launcher("default", "local", taskLauncher));
+			this.launcherRepository.save(new Launcher("MyPlatform", "local", taskLauncher));
+		}
+
+		@Test
+		@DirtiesContext
+		public void executeComposedTaskWithEnabledUserAccessToken1() {
+			initializeSuccessfulRegistry(appRegistry);
+
+			final List<String> arguments = new ArrayList<>();
+			AppDeploymentRequest request = getAppDeploymentRequestForToken(
+					prepareEnvironmentForTokenTests(this.taskSaveService,
+							this.taskLauncher, this.appRegistry), arguments, this.taskExecutionService,
+							this.taskLauncher);
+			assertTrue("Should contain the property 'dataflow-server-access-token'",
+					request.getDefinition().getProperties().containsKey("dataflow-server-access-token"));
+			assertEquals("foo-bar-123-token", request.getDefinition().getProperties().get("dataflow-server-access-token"));
+		}
+	}
+
+	static AppDeploymentRequest getAppDeploymentRequestForToken(Map<String, String> taskDeploymentProperties,
+			List<String> commandLineArgs, TaskExecutionService taskExecutionService,
+			TaskLauncher taskLauncher) {
+		assertEquals(1L, taskExecutionService.executeTask("seqTask", taskDeploymentProperties, commandLineArgs));
+
+		ArgumentCaptor<AppDeploymentRequest> argumentCaptor = ArgumentCaptor.forClass(AppDeploymentRequest.class);
+		verify(taskLauncher, atLeast(1)).launch(argumentCaptor.capture());
+
+		final AppDeploymentRequest request = argumentCaptor.getValue();
+
+		return request;
+	}
+
+	static Map<String, String> prepareEnvironmentForTokenTests(TaskSaveService taskSaveService,
+			TaskLauncher taskLauncher, AppRegistryService appRegistry) {
+		taskSaveService.saveTaskDefinition(new TaskDefinition("seqTask", "AAA && BBB"));
+		when(taskLauncher.launch(any())).thenReturn("0");
+		when(appRegistry.appExist(anyString(), any(ApplicationType.class))).thenReturn(true);
+		Map<String, String> properties = new HashMap<>();
+		properties.put("app.foo", "bar");
+		properties.put("app.seqTask.AAA.timestamp.format", "YYYY");
+		properties.put("deployer.seqTask.AAA.memory", "1240m");
+		properties.put("app.composed-task-runner.interval-time-between-checks", "1000");
+		return properties;
+	}
+
+		private static void initializeSuccessfulRegistry(AppRegistryService appRegistry) {
 		when(appRegistry.find(anyString(), any(ApplicationType.class))).thenReturn(
 				new AppRegistration("some-name", ApplicationType.task, URI.create("https://helloworld")));
 		try {

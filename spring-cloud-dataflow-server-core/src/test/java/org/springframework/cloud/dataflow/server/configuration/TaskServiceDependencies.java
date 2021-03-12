@@ -28,6 +28,7 @@ import org.springframework.batch.item.database.support.DataFieldMaxValueIncremen
 import org.springframework.batch.item.database.support.DefaultDataFieldMaxValueIncrementerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration;
 import org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration;
@@ -40,7 +41,10 @@ import org.springframework.cloud.dataflow.audit.service.AuditRecordService;
 import org.springframework.cloud.dataflow.audit.service.DefaultAuditRecordService;
 import org.springframework.cloud.dataflow.completion.CompletionConfiguration;
 import org.springframework.cloud.dataflow.configuration.metadata.ApplicationConfigurationMetadataResolver;
+import org.springframework.cloud.dataflow.container.registry.ContainerRegistryService;
+import org.springframework.cloud.dataflow.core.DefaultStreamDefinitionService;
 import org.springframework.cloud.dataflow.core.Launcher;
+import org.springframework.cloud.dataflow.core.StreamDefinitionService;
 import org.springframework.cloud.dataflow.core.TaskPlatform;
 import org.springframework.cloud.dataflow.registry.service.AppRegistryService;
 import org.springframework.cloud.dataflow.server.DockerValidatorProperties;
@@ -65,6 +69,7 @@ import org.springframework.cloud.dataflow.server.service.TaskExecutionInfoServic
 import org.springframework.cloud.dataflow.server.service.TaskExecutionService;
 import org.springframework.cloud.dataflow.server.service.TaskSaveService;
 import org.springframework.cloud.dataflow.server.service.TaskValidationService;
+import org.springframework.cloud.dataflow.server.service.impl.ComposedTaskRunnerConfigurationProperties;
 import org.springframework.cloud.dataflow.server.service.impl.DefaultSchedulerService;
 import org.springframework.cloud.dataflow.server.service.impl.DefaultTaskDeleteService;
 import org.springframework.cloud.dataflow.server.service.impl.DefaultTaskExecutionInfoService;
@@ -124,7 +129,8 @@ import static org.mockito.Mockito.when;
 		DockerValidatorProperties.class,
 		TaskConfigurationProperties.class,
 		TaskProperties.class,
-		DockerValidatorProperties.class })
+		DockerValidatorProperties.class,
+		ComposedTaskRunnerConfigurationProperties.class })
 @EntityScan({
 		"org.springframework.cloud.dataflow.registry.domain",
 		"org.springframework.cloud.dataflow.core"
@@ -145,16 +151,23 @@ public class TaskServiceDependencies extends WebMvcConfigurationSupport {
 	TaskConfigurationProperties taskConfigurationProperties;
 
 	@Autowired
+	ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties;
+
+	@Autowired
 	DockerValidatorProperties dockerValidatorProperties;
 
 	@Bean
+	@ConditionalOnMissingBean
+	public StreamDefinitionService streamDefinitionService() {
+		return new DefaultStreamDefinitionService();
+	}
+
+	@Bean
 	public TaskValidationService taskValidationService(AppRegistryService appRegistry,
-			DockerValidatorProperties dockerValidatorProperties, TaskDefinitionRepository taskDefinitionRepository,
-			TaskConfigurationProperties taskConfigurationProperties) {
+			DockerValidatorProperties dockerValidatorProperties, TaskDefinitionRepository taskDefinitionRepository) {
 		return new DefaultTaskValidationService(appRegistry,
 				dockerValidatorProperties,
-				taskDefinitionRepository,
-				taskConfigurationProperties.getComposedTaskRunnerName());
+				taskDefinitionRepository);
 	}
 
 	@Bean
@@ -221,6 +234,11 @@ public class TaskServiceDependencies extends WebMvcConfigurationSupport {
 	@Bean
 	ApplicationConfigurationMetadataResolver metadataResolver() {
 		return mock(ApplicationConfigurationMetadataResolver.class);
+	}
+
+	@Bean
+	public ContainerRegistryService containerRegistryService() {
+		return mock(ContainerRegistryService.class);
 	}
 
 	@Bean
@@ -292,8 +310,9 @@ public class TaskServiceDependencies extends WebMvcConfigurationSupport {
 				taskExecutionInfoService, taskDeploymentRepository,
 				taskExecutionRepositoryService, taskAppDeploymentRequestCreator,
 				taskExplorer, dataflowTaskExecutionDao, dataflowTaskExecutionMetadataDao,
-				oauth2TokenUtilsService, taskSaveService);
-		taskExecutionService.setAutoCreateTaskDefinitions(taskConfigurationProperties.isAutoCreateTaskDefinitions());
+				oauth2TokenUtilsService, taskSaveService, this.taskConfigurationProperties,
+				this.composedTaskRunnerConfigurationProperties);
+		taskExecutionService.setAutoCreateTaskDefinitions(this.taskConfigurationProperties.isAutoCreateTaskDefinitions());
 		return taskExecutionService;
 	}
 
@@ -301,38 +320,40 @@ public class TaskServiceDependencies extends WebMvcConfigurationSupport {
 	public TaskExecutionInfoService taskDefinitionRetriever(AppRegistryService registry,
 			TaskExplorer taskExplorer, TaskDefinitionRepository taskDefinitionRepository,
 			TaskConfigurationProperties taskConfigurationProperties, LauncherRepository launcherRepository,
-		List<TaskPlatform> taskPlatforms) {
+		List<TaskPlatform> taskPlatforms, ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties) {
 		return new DefaultTaskExecutionInfoService(this.dataSourceProperties,
 				registry, taskExplorer, taskDefinitionRepository,
-				taskConfigurationProperties, launcherRepository, taskPlatforms);
+				taskConfigurationProperties, launcherRepository, taskPlatforms,
+				composedTaskRunnerConfigurationProperties);
 	}
 
 	@Bean
 	@Conditional({ SchedulerConfiguration.SchedulerConfigurationPropertyChecker.class })
 	public SchedulerService schedulerService(CommonApplicationProperties commonApplicationProperties,
-			TaskPlatform taskPlatform, TaskDefinitionRepository taskDefinitionRepository,
+			List<TaskPlatform> taskPlatforms, TaskDefinitionRepository taskDefinitionRepository,
 			AppRegistryService registry, ResourceLoader resourceLoader,
 			ApplicationConfigurationMetadataResolver metaDataResolver,
 			SchedulerServiceProperties schedulerServiceProperties,
 			AuditRecordService auditRecordService,
 			TaskConfigurationProperties taskConfigurationProperties,
-			DataSourceProperties dataSourceProperties) {
+			DataSourceProperties dataSourceProperties,
+			ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties) {
 		return new DefaultSchedulerService(commonApplicationProperties,
-				taskPlatform, taskDefinitionRepository,
+				taskPlatforms, taskDefinitionRepository,
 				registry, resourceLoader,
 				taskConfigurationProperties, dataSourceProperties, null,
-				metaDataResolver, schedulerServiceProperties, auditRecordService);
+				metaDataResolver, schedulerServiceProperties, auditRecordService,
+				composedTaskRunnerConfigurationProperties);
 	}
 
 	@Bean
 	public TaskPlatform taskPlatform(Scheduler scheduler) {
-		Launcher launcher = new Launcher("default", "defaultType", Mockito.mock(TaskLauncher.class), scheduler);
+		Launcher launcher = new Launcher("testTaskPlatform", "defaultType", Mockito.mock(TaskLauncher.class), scheduler);
 		List<Launcher> launchers = new ArrayList<>();
 		launchers.add(launcher);
 		TaskPlatform taskPlatform = new TaskPlatform("testTaskPlatform", launchers);
 		return taskPlatform;
 	}
-
 
 	@Bean
 	public Scheduler scheduler() {

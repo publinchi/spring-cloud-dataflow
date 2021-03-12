@@ -25,6 +25,7 @@ import javax.sql.DataSource;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -120,6 +121,7 @@ public class TaskCommandTests extends AbstractShellIntegrationTest {
 	}
 
 	@Test
+	@Ignore
 	public void testTaskLaunchCTRUsingAltCtrName() {
 		logger.info("Launching instance of task");
 		String taskName = generateUniqueStreamOrTaskName();
@@ -147,18 +149,6 @@ public class TaskCommandTests extends AbstractShellIntegrationTest {
 	@Test(expected = IllegalArgumentException.class)
 	public void testGetLogInvalidId() throws Exception{
 		task().getTaskExecutionLogInvalidId();
-	}
-
-	@Test
-	public void testTaskLaunchCTRUsingInvalidAltCtrAppName() {
-		testInvalidCTRLaunch("1: timestamp && 2: timestamp", "timesdaftamp",
-				"The 'timesdaftamp' application could not be found.");
-	}
-
-	@Test
-	public void testTaskLaunchAltNameAgainstaNonCTRTaskDefinition() {
-		testInvalidCTRLaunch("timestamp", "composed-task-runner",
-				"Can not specify a Composed Task Runner Name when launching a non composed task definition");
 	}
 
 	private void testInvalidCTRLaunch(String taskDefinition, String ctrAppName, String expectedExceptionMessage) {
@@ -223,6 +213,28 @@ public class TaskCommandTests extends AbstractShellIntegrationTest {
 		task().create(taskName, "timestamp");
 		logger.info("Destroy created task");
 		task().destroyTask(taskName);
+	}
+
+	@Test
+	public void destroySpecificTaskWithCleanup() {
+		logger.info("Create Task Test");
+		String taskName = generateUniqueStreamOrTaskName();
+		task().create(taskName, "timestamp");
+		CommandResult cr = task().taskExecutionList();
+		assertTrue("task execution list by name command must be successful", cr.isSuccess());
+		Table table = (Table) cr.getResult();
+		int rowCountBeforeLaunch = table.getModel().getRowCount();
+		task().launch(taskName);
+		cr = task().taskExecutionListByName(taskName);
+		assertTrue("task execution list by name command must be successful", cr.isSuccess());
+		table = (Table) cr.getResult();
+		assertEquals("Number of rows returned was not expected", 2, table.getModel().getRowCount());
+		logger.info("Destroy created task with the cleanup");
+		task().destroyTask(taskName, true);
+		cr = task().taskExecutionList();
+		assertTrue("task execution list by name command must be successful", cr.isSuccess());
+		table = (Table) cr.getResult();
+		assertEquals("Number of rows returned was not expected", rowCountBeforeLaunch, table.getModel().getRowCount());
 	}
 
 	@Test

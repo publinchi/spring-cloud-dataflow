@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2019 the original author or authors.
+ * Copyright 2016-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,11 +34,14 @@ import org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfi
 import org.springframework.boot.autoconfigure.web.client.RestTemplateAutoConfiguration;
 import org.springframework.boot.test.util.TestPropertyValues;
 import org.springframework.cloud.common.security.core.support.OAuth2TokenUtilsService;
+import org.springframework.cloud.dataflow.container.registry.ContainerRegistryService;
+import org.springframework.cloud.dataflow.core.StreamDefinitionService;
 import org.springframework.cloud.dataflow.server.EnableDataFlowServer;
 import org.springframework.cloud.dataflow.server.config.features.SchedulerConfiguration;
 import org.springframework.cloud.dataflow.server.config.web.WebConfiguration;
 import org.springframework.cloud.dataflow.server.service.StreamValidationService;
 import org.springframework.cloud.dataflow.server.service.TaskExecutionService;
+import org.springframework.cloud.dataflow.server.service.impl.ComposedTaskRunnerConfigurationProperties;
 import org.springframework.cloud.dataflow.server.service.impl.DefaultTaskExecutionService;
 import org.springframework.cloud.dataflow.server.support.TestUtils;
 import org.springframework.cloud.deployer.autoconfigure.ResourceLoadingAutoConfiguration;
@@ -84,7 +87,7 @@ public class DataFlowServerConfigurationTests {
 				DataFlowServerConfiguration.class, PropertyPlaceholderAutoConfiguration.class,
 				RestTemplateAutoConfiguration.class, HibernateJpaAutoConfiguration.class, WebConfiguration.class,
 				SchedulerConfiguration.class, JacksonAutoConfiguration.class, SimpleTaskAutoConfiguration.class,
-				ResourceLoadingAutoConfiguration.class);
+				ResourceLoadingAutoConfiguration.class, ComposedTaskRunnerConfigurationProperties.class);
 		environment = new StandardEnvironment();
 		propertySources = environment.getPropertySources();
 	}
@@ -197,6 +200,16 @@ public class DataFlowServerConfigurationTests {
 		@Bean
 		public OAuth2TokenUtilsService oauth2TokenUtilsService() {
 			return mock(OAuth2TokenUtilsService.class);
+		}
+
+		@Bean
+		public StreamDefinitionService streamDefinitionService() {
+			return mock(StreamDefinitionService.class);
+		}
+
+		@Bean
+		public ContainerRegistryService containerRegistryService() {
+			return mock(ContainerRegistryService.class);
 		}
 	}
 }

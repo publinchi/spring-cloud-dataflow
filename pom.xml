@@ -2,7 +2,7 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 	<artifactId>spring-cloud-dataflow-parent</artifactId>
-	<version>2.5.1.1.RELEASE</version>
+	<version>2.7.1.1</version>
 	<packaging>pom</packaging>
 	<url>https://cloud.spring.io/spring-cloud-dataflow/</url>
 	<organization>
@@ -12,7 +12,7 @@
 	<parent>
 		<groupId>org.springframework.cloud</groupId>
 		<artifactId>spring-cloud-dataflow-build</artifactId>
-		<version>2.5.1.RELEASE</version>
+		<version>2.7.1</version>
 		<relativePath />
 	</parent>
 	<licenses>
@@ -55,34 +55,34 @@
 		<java.version>1.8</java.version>
 		<javadoc.opts>-Xdoclint:none</javadoc.opts>
 
-		<spring-cloud-dataflow-ui.version>2.4.4.RELEASE</spring-cloud-dataflow-ui.version>
+		<spring-cloud-dataflow-ui.version>3.0.1</spring-cloud-dataflow-ui.version>
 
-		<spring-cloud-dataflow-common.version>2.5.1.RELEASE</spring-cloud-dataflow-common.version>
-		<spring-cloud-deployer.version>2.3.1.RELEASE</spring-cloud-deployer.version>
-		<spring-cloud-deployer-local.version>2.3.1.RELEASE</spring-cloud-deployer-local.version>
+		<spring-cloud-dataflow-common.version>2.7.1</spring-cloud-dataflow-common.version>
+		<spring-cloud-deployer.version>2.5.1</spring-cloud-deployer.version>
+		<spring-cloud-deployer-local.version>2.5.1</spring-cloud-deployer-local.version>
+		<spring-cloud-deployer-cloudfoundry.version>2.5.1</spring-cloud-deployer-cloudfoundry.version>
+		<spring-cloud-deployer-kubernetes.version>2.5.1</spring-cloud-deployer-kubernetes.version>
 
+		<kubernetes-client.version>4.10.2</kubernetes-client.version>
 
-		<spring-cloud-deployer-cloudfoundry.version>2.3.1.RELEASE</spring-cloud-deployer-cloudfoundry.version>
-		<spring-cloud-deployer-kubernetes.version>2.3.1.RELEASE</spring-cloud-deployer-kubernetes.version>
+		<spring-cloud-skipper.version>2.6.1</spring-cloud-skipper.version>
 
-		<kubernetes-client.version>4.1.0</kubernetes-client.version>
-
-		<spring-cloud-skipper.version>2.4.1.RELEASE</spring-cloud-skipper.version>
-
-		<spring-cloud-task.version>2.2.3.1.RELEASE</spring-cloud-task.version>
+		<spring-cloud-task.version>2.2.5.RELEASE</spring-cloud-task.version>
 
 		<!-- Only used for tests -->
 		<spring-security-oauth2.version>2.3.7.RELEASE</spring-security-oauth2.version>
 
-		<java-cfenv-boot.version>1.1.3.RELEASE</java-cfenv-boot.version>
+		<java-cfenv-boot.version>2.2.2.RELEASE</java-cfenv-boot.version>
 
-		<spring-cloud-common-security-config.version>1.3.1.RELEASE</spring-cloud-common-security-config.version>
+		<spring-cloud-services-starter-config-client.version>3.1.3.RELEASE</spring-cloud-services-starter-config-client.version>
+
+		<spring-cloud-common-security-config.version>1.5.1</spring-cloud-common-security-config.version>
 
 		<spring-shell.version>1.2.0.RELEASE</spring-shell.version>
 		<commons-io.version>2.4</commons-io.version>
 		<commons-lang.version>2.4</commons-lang.version>
 
-		<jacoco-maven-plugin.version>0.7.9</jacoco-maven-plugin.version>
+		<jacoco-maven-plugin.version>0.8.5</jacoco-maven-plugin.version>
 		<sonar-maven-plugin.version>3.0.2</sonar-maven-plugin.version>
 		<semver.version>2.2.0</semver.version>
 		<apache-directory-server.version>1.5.5</apache-directory-server.version>
@@ -90,10 +90,13 @@
 		<json-unit.version>2.11.1</json-unit.version>
 		<docker-compose-rule.version>1.4.2</docker-compose-rule.version>
 		<findbugs.version>3.0.2</findbugs.version>
+		<prometheus-rsocket-spring.version>1.2.1</prometheus-rsocket-spring.version>
+		<joda-time.version>2.10.6</joda-time.version>
 		<aws-java-sdk-ecr.version>1.11.731</aws-java-sdk-ecr.version>
 		<commons-text.version>1.8</commons-text.version>
 	</properties>
 	<modules>
+		<module>spring-cloud-dataflow-container-registry</module>
 		<module>spring-cloud-dataflow-configuration-metadata</module>
 		<module>spring-cloud-dataflow-core-dsl</module>
 		<module>spring-cloud-dataflow-core</module>
@@ -112,7 +115,10 @@
 		<module>spring-cloud-dataflow-platform-kubernetes</module>
 		<module>spring-cloud-dataflow-platform-cloudfoundry</module>
 		<module>spring-cloud-starter-dataflow-server</module>
+		<module>spring-cloud-starter-dataflow-ui</module>
 		<module>spring-cloud-dataflow-audit</module>
+		<module>spring-cloud-dataflow-composed-task-runner</module>
+		<module>spring-cloud-dataflow-test</module>
 	</modules>
 	<dependencyManagement>
 		<dependencies>
@@ -140,7 +146,7 @@
 			<dependency>
 				<groupId>org.springframework.cloud</groupId>
 				<artifactId>spring-cloud-dataflow-dependencies</artifactId>
-				<version>2.5.1.1.RELEASE</version>
+				<version>2.7.1</version>
 				<type>pom</type>
 				<scope>import</scope>
 			</dependency>
@@ -181,18 +187,23 @@
 			</dependency>
 			<dependency>
 				<groupId>io.pivotal.cfenv</groupId>
-				<artifactId>java-cfenv-boot</artifactId>
+				<artifactId>java-cfenv</artifactId>
 				<version>${java-cfenv-boot.version}</version>
 			</dependency>
 			<dependency>
 				<groupId>io.pivotal.cfenv</groupId>
-				<artifactId>java-cfenv-boot-pivotal-scs</artifactId>
+				<artifactId>java-cfenv-boot</artifactId>
 				<version>${java-cfenv-boot.version}</version>
 			</dependency>
 			<dependency>
 				<groupId>io.pivotal.cfenv</groupId>
 				<artifactId>java-cfenv-boot-pivotal-sso</artifactId>
 				<version>${java-cfenv-boot.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>io.pivotal.spring.cloud</groupId>
+				<artifactId>spring-cloud-services-starter-config-client</artifactId>
+				<version>${spring-cloud-services-starter-config-client.version}</version>
 			</dependency>
 			<dependency>
 				<groupId>org.springframework.shell</groupId>
@@ -253,6 +264,26 @@
 				<groupId>com.google.code.findbugs</groupId>
 				<artifactId>jsr305</artifactId>
 				<version>${findbugs.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>io.micrometer.prometheus</groupId>
+				<artifactId>prometheus-rsocket-spring</artifactId>
+				<version>${prometheus-rsocket-spring.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>joda-time</groupId>
+				<artifactId>joda-time</artifactId>
+				<version>${joda-time.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.apache.commons</groupId>
+				<artifactId>commons-text</artifactId>
+				<version>${commons-text.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.amazonaws</groupId>
+				<artifactId>aws-java-sdk-ecr</artifactId>
+				<version>${aws-java-sdk-ecr.version}</version>
 			</dependency>
 		</dependencies>
 	</dependencyManagement>
@@ -411,6 +442,14 @@
 					<id>spring-milestones</id>
 					<name>Spring Milestones</name>
 					<url>https://repo.spring.io/libs-milestone-local</url>
+					<snapshots>
+						<enabled>false</enabled>
+					</snapshots>
+				</pluginRepository>
+				<pluginRepository>
+					<id>spring-releases</id>
+					<name>Spring Releases</name>
+					<url>https://repo.spring.io/libs-release-local</url>
 					<snapshots>
 						<enabled>false</enabled>
 					</snapshots>

@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2019 the original author or authors.
+ * Copyright 2018-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,16 +19,19 @@ package org.springframework.cloud.dataflow.server.service.impl;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.cloud.context.encrypt.EncryptorFactory;
 import org.springframework.cloud.dataflow.core.TaskDefinition;
+import org.springframework.cloud.dataflow.core.TaskPlatformFactory;
 import org.springframework.cloud.dataflow.core.dsl.TaskApp;
 import org.springframework.cloud.dataflow.core.dsl.TaskNode;
 import org.springframework.cloud.dataflow.core.dsl.TaskParser;
-import org.springframework.cloud.dataflow.server.controller.WhitelistProperties;
+import org.springframework.cloud.dataflow.server.controller.VisibleProperties;
 import org.springframework.cloud.dataflow.server.support.RelaxedNames;
 import org.springframework.cloud.deployer.spi.core.AppDefinition;
 import org.springframework.core.io.Resource;
@@ -59,32 +62,23 @@ public class TaskServiceUtils {
 	/**
 	 * Creates a properly formatted CTR definition based on the graph provided.
 	 * @param graph the graph for the CTR to execute.
-	 * @param taskConfigurationProperties the properties that contain the name
-	 * of the CTR app to be launched.
 	 * @return String containing the CTR task definition.
 	 */
-	public static String createComposedTaskDefinition(String graph,
-			TaskConfigurationProperties taskConfigurationProperties) {
-			return createComposedTaskDefinition(null, graph, taskConfigurationProperties);
+	public static String createComposedTaskDefinition(String graph) {
+		return createComposedTaskDefinition(null, graph);
 	}
 
 	/**
 	 * Creates a properly formatted CTR definition based on the graph provided.
 	 * @param alternateComposedTaskRunnerName a ctr name to be used instead of the default.
 	 * @param graph the graph for the CTR to execute.
-	 * @param taskConfigurationProperties the properties that contain the name
 	 * of the CTR app to be launched.
 	 * @return String containing the CTR task definition.
 	 */
-	public static String createComposedTaskDefinition(String alternateComposedTaskRunnerName, String graph,
-			TaskConfigurationProperties taskConfigurationProperties) {
+	public static String createComposedTaskDefinition(String alternateComposedTaskRunnerName, String graph) {
 		Assert.hasText(graph, "graph must not be empty or null");
-		Assert.notNull(taskConfigurationProperties,
-				"taskConfigurationProperties must not be null");
-		Assert.hasText(taskConfigurationProperties.getComposedTaskRunnerName(),
-				"taskConfigurationProperties.composedTaskRunnerName must not be null");
-		String composedTaskRunnerName = taskConfigurationProperties.getComposedTaskRunnerName();
-		if(StringUtils.hasText(alternateComposedTaskRunnerName)) {
+		String composedTaskRunnerName = ComposedTaskRunnerConfigurationProperties.COMPOSED_TASK_RUNNER_NAME;
+		if (StringUtils.hasText(alternateComposedTaskRunnerName)) {
 			composedTaskRunnerName = alternateComposedTaskRunnerName;
 		}
 		return String.format("%s --graph=\"%s\"", composedTaskRunnerName, graph);
@@ -120,19 +114,38 @@ public class TaskServiceUtils {
 	 */
 	public static TaskDefinition updateTaskProperties(TaskDefinition taskDefinition,
 			DataSourceProperties dataSourceProperties) {
+		return updateTaskProperties(taskDefinition, dataSourceProperties, true);
+	}
+
+	/**
+	 * Updates the task definition with the datasource properties.
+	 * @param taskDefinition the {@link TaskDefinition} to be updated.
+	 * @param dataSourceProperties the dataSource properties used by SCDF.
+	 * @param setDatabaseCredentials if true database username and password that should be set in the {@link TaskDefinition} .
+	 * @return the updated {@link TaskDefinition}
+	 */
+	public static TaskDefinition updateTaskProperties(TaskDefinition taskDefinition,
+			DataSourceProperties dataSourceProperties,
+			boolean setDatabaseCredentials) {
 		Assert.notNull(taskDefinition, "taskDefinition must not be null");
 		Assert.notNull(dataSourceProperties, "dataSourceProperties must not be null");
 		TaskDefinition.TaskDefinitionBuilder builder = TaskDefinition.TaskDefinitionBuilder.from(taskDefinition);
-		builder.setProperty("spring.datasource.url", dataSourceProperties.getUrl());
-		builder.setProperty("spring.datasource.username", dataSourceProperties.getUsername());
-		// password may be empty
-		if (StringUtils.hasText(dataSourceProperties.getPassword())) {
-			builder.setProperty("spring.datasource.password", StringUtils.isEmpty(System.getenv(ENCRYPT_KEY))
+		if (setDatabaseCredentials) {
+			// password may be empty
+			if (StringUtils.hasText(dataSourceProperties.getPassword())) {
+				builder.setProperty("spring.datasource.password", StringUtils.isEmpty(System.getenv(ENCRYPT_KEY))
 					? dataSourceProperties.getPassword()
 					: CIPHER + new EncryptorFactory().create(System.getenv(ENCRYPT_KEY))
 					.encrypt(dataSourceProperties.getPassword()));
+			}
+			builder.setProperty("spring.datasource.username", dataSourceProperties.getUsername());
 		}
-		builder.setProperty("spring.datasource.driverClassName", dataSourceProperties.getDriverClassName());
+		if (!isPropertyPresent("spring.datasource.url", taskDefinition)) {
+			builder.setProperty("spring.datasource.url", dataSourceProperties.getUrl());
+		}
+		if (!isPropertyPresent("spring.datasource.driverClassName", taskDefinition)) {
+			builder.setProperty("spring.datasource.driverClassName", dataSourceProperties.getDriverClassName());
+		}
 		builder.setTaskName(taskDefinition.getTaskName());
 		builder.setDslText(taskDefinition.getDslText());
 		return builder.build();
@@ -152,24 +165,24 @@ public class TaskServiceUtils {
 
 	/**
 	 * Return a copy of a given task definition where short form parameters have been expanded
-	 * to their long form (amongst the whitelisted supported properties of the app) if
+	 * to their long form (amongst the visible properties of the app) if
 	 * applicable.
 	 * @param original the task definition with the original set of properties.
-	 * @param resource the resource to be used for identifying white listed properties.
+	 * @param resource the resource to be used for identifying included properties.
 	 * @param appDeploymentProperties the app deployment properties to be added to the {@link AppDefinition}.
-	 * @param whitelistProperties util for formatting white listed properties properly.
+	 * @param visibleProperties util for formatting visible properties properly.
 	 * @return fully qualified {@link AppDefinition}.
 	 */
 	public static AppDefinition mergeAndExpandAppProperties(TaskDefinition original,
 			Resource resource,
 			Map<String, String> appDeploymentProperties,
-			WhitelistProperties whitelistProperties) {
+			VisibleProperties visibleProperties) {
 		Assert.notNull(original, "original must not be null");
 		Assert.notNull(appDeploymentProperties, "appDeploymentProperties must not be null");
-		Assert.notNull(whitelistProperties, "whitelistProperties must not be null");
+		Assert.notNull(visibleProperties, "visibleProperties must not be null");
 		Map<String, String> merged = new HashMap<>(original.getProperties());
 		merged.putAll(appDeploymentProperties);
-		merged = whitelistProperties.qualifyProperties(merged, resource);
+		merged = visibleProperties.qualifyProperties(merged, resource);
 		return new AppDefinition(original.getName(), merged);
 	}
 
@@ -196,7 +209,7 @@ public class TaskServiceUtils {
 					}
 				}
 			}
-			if(isPutDataFlowServerUriKey) {
+			if (isPutDataFlowServerUriKey) {
 				appDeploymentProperties.put(dataFlowServerUriKey, dataflowServerUri);
 			}
 		}
@@ -216,8 +229,8 @@ public class TaskServiceUtils {
 				(subTask.getLabel() == null) ? subTask.getName() : subTask.getLabel());
 		String scdfTaskName = String.format("%s.%s.%s.", prefix, taskNode.getName(),
 				(subTask.getLabel() == null) ? subTask.getName() : subTask.getLabel());
-		Set<String> propertyKeys = taskDeploymentProperties.keySet().
-				stream().filter(taskProperty -> taskProperty.startsWith(scdfTaskName))
+		Set<String> propertyKeys = taskDeploymentProperties.keySet().stream()
+				.filter(taskProperty -> taskProperty.startsWith(scdfTaskName))
 				.collect(Collectors.toSet());
 		for (String taskProperty : propertyKeys) {
 			if (result.length() != 0) {
@@ -230,5 +243,85 @@ public class TaskServiceUtils {
 			taskDeploymentProperties.remove(taskProperty);
 		}
 		return result;
+	}
+
+	private static boolean isPropertyPresent(String property, TaskDefinition taskDefinition) {
+		RelaxedNames relaxedNames = new RelaxedNames(property);
+		boolean result = false;
+		Map<String, String> properties = taskDefinition.getProperties();
+		for (String dataFlowUriKey : relaxedNames) {
+			if (properties.containsKey(dataFlowUriKey)) {
+				result = true;
+				break;
+			}
+		}
+		return result;
+	}
+
+	/**
+	 * Determines if a database credentials should be added to task properties.
+	 * @param platformType The type of platform.
+	 * @param useKubernetesSecrets User wants to use kubernetes secrets for user name and password.
+	 * @return true if database credentials should be added to task properties.
+	 */
+	public static boolean addDatabaseCredentials(boolean useKubernetesSecrets, String platformType) {
+		boolean addDatabaseCredentials = false;
+		if (!useKubernetesSecrets ||
+				!StringUtils.hasText(platformType) || !platformType.equals(TaskPlatformFactory.KUBERNETES_PLATFORM_TYPE)) {
+			addDatabaseCredentials = true;
+		}
+		return addDatabaseCredentials;
+	}
+
+	/**
+	 * Merge the common properties defined via the spring.cloud.dataflow.common-properties.task-resource file.
+	 * Doesn't override existing properties!
+	 * The placeholders defined in the task-resource file are not resolved by SCDF but passed to the apps as they are.
+	 *
+	 * @param defaultProperties Default properties, if any, to contribute to the launch app properties.
+	 * @param appDeploymentProperties App deployment properties passed to the Task at launch.
+	 */
+	public static void contributeCommonProperties(Optional<Properties> defaultProperties,
+			Map<String, String> appDeploymentProperties, String taskPlatformType) {
+		String taskPlatformTypePrefix = taskPlatformType.toLowerCase() + ".";
+		defaultProperties.ifPresent(defaults -> defaults.entrySet().stream()
+				.filter(e -> e.getValue() != null)
+				.filter(e -> e.getKey().toString().startsWith(taskPlatformTypePrefix))
+				.forEach(e -> appDeploymentProperties.putIfAbsent(
+						e.getKey().toString().replaceFirst(taskPlatformTypePrefix, ""), e.getValue().toString())));
+
+	}
+
+	static void addImagePullSecretProperty(Map<String, String> taskDeploymentProperties,
+											ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties) {
+		if (composedTaskRunnerConfigurationProperties != null) {
+			String imagePullSecret = composedTaskRunnerConfigurationProperties.getImagePullSecret();
+
+			if (StringUtils.hasText(imagePullSecret)) {
+				String imagePullSecretPropertyKey = "deployer.composed-task-runner.kubernetes.imagePullSecret";
+				taskDeploymentProperties.put(imagePullSecretPropertyKey, imagePullSecret);
+			}
+		}
+	}
+
+	static String getComposedTaskLauncherUri(TaskConfigurationProperties taskConfigurationProperties,
+									  ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties) {
+		if(composedTaskRunnerConfigurationProperties != null &&
+				StringUtils.hasText(composedTaskRunnerConfigurationProperties.getUri())) {
+			return composedTaskRunnerConfigurationProperties.getUri();
+		}
+
+		return taskConfigurationProperties.getComposedTaskRunnerUri();
+	}
+
+	static boolean isUseUserAccessToken(TaskConfigurationProperties taskConfigurationProperties,
+						ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties) {
+		if (composedTaskRunnerConfigurationProperties != null) {
+			if (composedTaskRunnerConfigurationProperties.isUseUserAccessToken() != null) {
+				return composedTaskRunnerConfigurationProperties.isUseUserAccessToken();
+			}
+		}
+
+		return taskConfigurationProperties.isUseUserAccessToken();
 	}
 }

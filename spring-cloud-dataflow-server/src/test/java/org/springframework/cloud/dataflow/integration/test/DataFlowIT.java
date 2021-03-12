@@ -59,13 +59,13 @@ import org.springframework.cloud.dataflow.integration.test.util.DockerComposeFac
 import org.springframework.cloud.dataflow.integration.test.util.DockerComposeFactoryProperties;
 import org.springframework.cloud.dataflow.integration.test.util.ResourceExtractor;
 import org.springframework.cloud.dataflow.integration.test.util.RuntimeApplicationHelper;
-import org.springframework.cloud.dataflow.integration.test.util.task.dsl.Task;
-import org.springframework.cloud.dataflow.integration.test.util.task.dsl.Tasks;
 import org.springframework.cloud.dataflow.rest.client.DataFlowTemplate;
 import org.springframework.cloud.dataflow.rest.client.dsl.DeploymentPropertiesBuilder;
 import org.springframework.cloud.dataflow.rest.client.dsl.Stream;
 import org.springframework.cloud.dataflow.rest.client.dsl.StreamApplication;
 import org.springframework.cloud.dataflow.rest.client.dsl.StreamDefinition;
+import org.springframework.cloud.dataflow.rest.client.dsl.task.Task;
+import org.springframework.cloud.dataflow.rest.client.dsl.task.TaskBuilder;
 import org.springframework.cloud.dataflow.rest.resource.DetailedAppRegistrationResource;
 import org.springframework.cloud.dataflow.rest.resource.TaskExecutionStatus;
 import org.springframework.cloud.dataflow.rest.resource.about.AboutResource;
@@ -132,7 +132,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * you can have the test feature that uses the local run SCDF/Skipper/MySQL to deploy and run Stream only test to the
  * remote K8s or CF environments. Note that Tasks can only be run locally!
  *
- * Follow the https://dataflow.spring.io/docs/2.3.0.SNAPSHOT/installation/local/docker-customize/#docker-compose-extensions
+ * Follow the https://dataflow.spring.io/docs/installation/local/docker-customize/#multi-platform-support
  * multi-platform instructions to prepare docker-compose-k8s.yml and docker-compose-cf.yml files.
  *
  * Stream tests on Kubernetes (k8s) platform:
@@ -168,7 +168,6 @@ public class DataFlowIT {
 	private DataFlowTemplate dataFlowOperations;
 	private RuntimeApplicationHelper runtimeApps;
 	private RestTemplate restTemplate;
-	private Tasks tasks;
 
 	/**
 	 * Folder that collects the external docker-compose YAML files such as
@@ -196,7 +195,6 @@ public class DataFlowIT {
 		dataFlowOperations = new DataFlowTemplate(URI.create(testProperties.getDataflowServerUrl()));
 		runtimeApps = new RuntimeApplicationHelper(dataFlowOperations,
 				testProperties.getPlatformName(), testProperties.getKubernetesAppHostSuffix());
-		tasks = new Tasks(dataFlowOperations);
 		restTemplate = new RestTemplate(); // used for HTTP post in tests
 
 		Awaitility.setDefaultPollInterval(Duration.ofSeconds(5));
@@ -221,6 +219,7 @@ public class DataFlowIT {
 
 	@Test
 	public void applicationMetadataTests() {
+		logger.info("application-metadata-test");
 		// Maven app with metadata
 		DetailedAppRegistrationResource mavenAppWithJarMetadata = dataFlowOperations.appRegistryOperations()
 				.info("file", ApplicationType.sink, false);
@@ -234,11 +233,18 @@ public class DataFlowIT {
 		assertThat(mavenAppWithoutMetadata.getOptions()).hasSize(8);
 
 		// Docker app with container image metadata
-		dataFlowOperations.appRegistryOperations().register("docker-app-with-container-metadata", ApplicationType.sink,
-				"docker:springcloudstream/time-source-kafka:2.1.2.BUILD-SNAPSHOT", null, true);
+		dataFlowOperations.appRegistryOperations().register("docker-app-with-container-metadata", ApplicationType.source,
+				"docker:springcloudstream/time-source-kafka:2.1.4.RELEASE", null, true);
 		DetailedAppRegistrationResource dockerAppWithContainerMetadata = dataFlowOperations.appRegistryOperations()
-				.info("docker-app-with-container-metadata", ApplicationType.sink, false);
+				.info("docker-app-with-container-metadata", ApplicationType.source, false);
 		assertThat(dockerAppWithContainerMetadata.getOptions()).hasSize(6);
+
+		// Docker app with container image metadata with escape characters.
+		dataFlowOperations.appRegistryOperations().register("docker-app-with-container-metadata-escape-chars", ApplicationType.source,
+				"docker:springcloudstream/http-source-rabbit:2.1.3.RELEASE", null, true);
+		DetailedAppRegistrationResource dockerAppWithContainerMetadataWithEscapeChars = dataFlowOperations.appRegistryOperations()
+				.info("docker-app-with-container-metadata-escape-chars", ApplicationType.source, false);
+		assertThat(dockerAppWithContainerMetadataWithEscapeChars.getOptions()).hasSize(6);
 
 		// Docker app without metadata
 		dataFlowOperations.appRegistryOperations().register("docker-app-without-metadata", ApplicationType.sink,
@@ -256,7 +262,8 @@ public class DataFlowIT {
 		assertThat(dockerAppWithJarMetadata.getOptions()).hasSize(8);
 
 		// unregister the test apps
-		dataFlowOperations.appRegistryOperations().unregister("docker-app-with-container-metadata", ApplicationType.sink);
+		dataFlowOperations.appRegistryOperations().unregister("docker-app-with-container-metadata", ApplicationType.source);
+		dataFlowOperations.appRegistryOperations().unregister("docker-app-with-container-metadata-escape-chars", ApplicationType.source);
 		dataFlowOperations.appRegistryOperations().unregister("docker-app-without-metadata", ApplicationType.sink);
 		dataFlowOperations.appRegistryOperations().unregister("maven-app-without-metadata", ApplicationType.sink);
 		dataFlowOperations.appRegistryOperations().unregister("docker-app-with-jar-metadata", ApplicationType.sink);
@@ -269,7 +276,6 @@ public class DataFlowIT {
 	public void featureInfo() {
 		logger.info("platform-feature-info-test");
 		AboutResource about = dataFlowOperations.aboutOperation().get();
-		//assertThat(about.getFeatureInfo().isGrafanaEnabled()).isEqualTo(prometheusPresent() || influxPresent());
 		assertThat(about.getFeatureInfo().isAnalyticsEnabled()).isTrue();
 		assertThat(about.getFeatureInfo().isStreamsEnabled()).isTrue();
 		assertThat(about.getFeatureInfo().isTasksEnabled()).isTrue();
@@ -322,8 +328,7 @@ public class DataFlowIT {
 
 			httpPost(runtimeApps.getApplicationInstanceUrl(httpApp), message);
 
-			Awaitility.await().until(
-					() -> runtimeApps.getFirstInstanceLog(stream.getName(), "log").contains(message.toUpperCase()));
+			Awaitility.await().until(() -> stream.logs(app("log")).contains(message.toUpperCase()));
 		}
 	}
 
@@ -377,7 +382,7 @@ public class DataFlowIT {
 		logger.info("stream-lifecycle-test: DEPLOY");
 		try (Stream stream = Stream.builder(dataFlowOperations)
 				.name("lifecycle-test")
-				.definition("time | log --log.expression='TICKTOCK - TIMESTAMP: '.concat(payload)")
+				.definition("time | log --log.name=\"\" --log.expression='TICKTOCK - TIMESTAMP: '.concat(payload)")
 				.create()
 				.deploy(testDeploymentProperties())) {
 
@@ -386,11 +391,14 @@ public class DataFlowIT {
 
 			Awaitility.await().until(() -> stream.getStatus().equals(DEPLOYED));
 
-			Awaitility.await().until(() -> runtimeApps.getFirstInstanceLog(stream.getName(), "log")
-					.contains("TICKTOCK - TIMESTAMP:"));
+			Awaitility.await().until(
+					() -> stream.logs(app("log")).contains("TICKTOCK - TIMESTAMP:"));
 
 			assertThat(stream.history().size()).isEqualTo(1L);
-			assertThat(stream.history().get(1)).isEqualTo(DEPLOYED);
+			Awaitility.await().until(() -> stream.history().get(1).equals(DEPLOYED));
+
+			assertThat(stream.logs()).contains("TICKTOCK - TIMESTAMP:");
+			assertThat(stream.logs(app("log"))).contains("TICKTOCK - TIMESTAMP:");
 
 			// UPDATE
 			logger.info("stream-lifecycle-test: UPDATE");
@@ -402,12 +410,12 @@ public class DataFlowIT {
 
 			Awaitility.await().until(() -> stream.getStatus().equals(DEPLOYED));
 
-			Awaitility.await().until(() -> runtimeApps.getFirstInstanceLog(stream.getName(), "log")
-					.contains("Updated TICKTOCK - TIMESTAMP:"));
+			Awaitility.await().until(
+					() -> stream.logs(app("log")).contains("Updated TICKTOCK - TIMESTAMP:"));
 
 			assertThat(stream.history().size()).isEqualTo(2);
-			assertThat(stream.history().get(1)).isEqualTo(DELETED);
-			assertThat(stream.history().get(2)).isEqualTo(DEPLOYED);
+			Awaitility.await().until(() -> stream.history().get(1).equals(DELETED));
+			Awaitility.await().until(() -> stream.history().get(2).equals(DEPLOYED));
 
 			// ROLLBACK
 			logger.info("stream-lifecycle-test: ROLLBACK");
@@ -416,13 +424,13 @@ public class DataFlowIT {
 			Awaitility.await().until(() -> stream.getStatus().equals(DEPLOYED));
 			assertThat(stream.getStatus()).isEqualTo(DEPLOYED);
 
-			Awaitility.await().until(() -> runtimeApps.getFirstInstanceLog(stream.getName(), "log")
-					.contains("TICKTOCK - TIMESTAMP:"));
+			Awaitility.await().until(
+					() -> stream.logs(app("log")).contains("TICKTOCK - TIMESTAMP:"));
 
 			assertThat(stream.history().size()).isEqualTo(3);
-			assertThat(stream.history().get(1)).isEqualTo(DELETED);
-			assertThat(stream.history().get(2)).isEqualTo(DELETED);
-			assertThat(stream.history().get(3)).isEqualTo(DEPLOYED);
+			Awaitility.await().until(() -> stream.history().get(1).equals(DELETED));
+			Awaitility.await().until(() -> stream.history().get(2).equals(DELETED));
+			Awaitility.await().until(() -> stream.history().get(3).equals(DEPLOYED));
 
 			// UNDEPLOY
 			logger.info("stream-lifecycle-test: UNDEPLOY");
@@ -432,9 +440,9 @@ public class DataFlowIT {
 			assertThat(stream.getStatus()).isEqualTo(UNDEPLOYED);
 
 			assertThat(stream.history().size()).isEqualTo(3);
-			assertThat(stream.history().get(1)).isEqualTo(DELETED);
-			assertThat(stream.history().get(2)).isEqualTo(DELETED);
-			assertThat(stream.history().get(3)).isEqualTo(DELETED);
+			Awaitility.await().until(() -> stream.history().get(1).equals(DELETED));
+			Awaitility.await().until(() -> stream.history().get(2).equals(DELETED));
+			Awaitility.await().until(() -> stream.history().get(3).equals(DELETED));
 
 			assertThat(dataFlowOperations.streamOperations().list().getMetadata().getTotalElements()).isEqualTo(1L);
 			// DESTROY
@@ -454,8 +462,8 @@ public class DataFlowIT {
 
 			Awaitility.await().until(() -> stream.getStatus().equals(DEPLOYED));
 
-			final StreamApplication time = new StreamApplication("time");
-			final StreamApplication log = new StreamApplication("log");
+			final StreamApplication time = app("time");
+			final StreamApplication log = app("log");
 
 			Map<StreamApplication, Map<String, String>> streamApps = stream.runtimeApps();
 			assertThat(streamApps.size()).isEqualTo(2);
@@ -499,8 +507,7 @@ public class DataFlowIT {
 			String httpAppUrl = runtimeApps.getApplicationInstanceUrl(httpStream.getName(), "http");
 			httpPost(httpAppUrl, message);
 
-			Awaitility.await().until(() -> runtimeApps.getFirstInstanceLog(logStream.getName(), "log")
-					.contains(message));
+			Awaitility.await().until(() -> logStream.logs(app("log")).contains(message));
 		}
 	}
 
@@ -527,8 +534,8 @@ public class DataFlowIT {
 			String httpAppUrl = runtimeApps.getApplicationInstanceUrl(httpLogStream.getName(), "http");
 			httpPost(httpAppUrl, message);
 
-			Awaitility.await().until(() -> runtimeApps.getFirstInstanceLog(tapStream.getName(), "log")
-					.contains(message));
+			Awaitility.await().until(
+					() -> tapStream.logs(app("log")).contains(message));
 		}
 	}
 
@@ -561,16 +568,17 @@ public class DataFlowIT {
 			String httpAppUrl = runtimeApps.getApplicationInstanceUrl(httpStreamOne.getName(), "http");
 			httpPost(httpAppUrl, messageOne);
 
-			Awaitility.await().until(() -> runtimeApps.getFirstInstanceLog(logStream.getName(), "log")
-					.contains(messageOne));
+			Awaitility.await().until(
+					() -> logStream.logs(app("log")).contains(messageOne));
 
 			String messageTwo = "Unique Test message: " + new Random().nextInt();
 
 			String httpAppUrl2 = runtimeApps.getApplicationInstanceUrl(httpStreamTwo.getName(), "http");
 			httpPost(httpAppUrl2, messageTwo);
 
-			Awaitility.await().until(() -> runtimeApps.getFirstInstanceLog(logStream.getName(), "log")
-					.contains(messageTwo));
+			Awaitility.await().until(
+					() -> logStream.logs(app("log")).contains(messageTwo));
+
 		}
 	}
 
@@ -602,10 +610,8 @@ public class DataFlowIT {
 			httpPost(httpAppUrl, "abcd");
 			httpPost(httpAppUrl, "defg");
 
-			Awaitility.await().until(() -> runtimeApps.getFirstInstanceLog(fooLogStream.getName(), "log")
-					.contains("abcd-foo"));
-			Awaitility.await().until(() -> runtimeApps.getFirstInstanceLog(barLogStream.getName(), "log")
-					.contains("defg-bar"));
+			Awaitility.await().until(() -> fooLogStream.logs(app("log")).contains("abcd-foo"));
+			Awaitility.await().until(() -> barLogStream.logs(app("log")).contains("defg-bar"));
 		}
 	}
 
@@ -678,11 +684,11 @@ public class DataFlowIT {
 
 				// http://localhost:8086/query?db=myinfluxdb&q=SELECT%20%2A%20FROM%20%22my_http_counter%22
 				String myHttpCounter = httpGet(testProperties.getInfluxUrl() + "/query?db=myinfluxdb&q=SELECT * FROM \"my_http_counter\"");
-				JsonAssertions.assertThatJson(myHttpCounter).inPath("$.results[0].series[0].values[0][6]")
+				JsonAssertions.assertThatJson(myHttpCounter).inPath("$.results[0].series[0].values[0][7]")
 						.isEqualTo(String.format("\"%s\"", message1.length()));
-				JsonAssertions.assertThatJson(myHttpCounter).inPath("$.results[0].series[0].values[1][6]")
+				JsonAssertions.assertThatJson(myHttpCounter).inPath("$.results[0].series[0].values[1][7]")
 						.isEqualTo(String.format("\"%s\"", message2.length()));
-				JsonAssertions.assertThatJson(myHttpCounter).inPath("$.results[0].series[0].values[2][6]")
+				JsonAssertions.assertThatJson(myHttpCounter).inPath("$.results[0].series[0].values[2][7]")
 						.isEqualTo(String.format("\"%s\"", message3.length()));
 			});
 		}
@@ -712,15 +718,12 @@ public class DataFlowIT {
 			Awaitility.await(stream.getName() + " failed to deploy!")
 					.until(() -> stream.getStatus().equals(DEPLOYED));
 
-			Awaitility.await().await("Source not started")
-					.until(() -> runtimeApps.getFirstInstanceLog(stream, "time")
-							.contains("Started TimeSource"));
-			Awaitility.await().await("Sink not started")
-					.until(() -> runtimeApps.getFirstInstanceLog(stream, "log")
-							.contains("Started LogSink"));
-			Awaitility.await().await("No output found")
-					.until(() -> runtimeApps.getFirstInstanceLog(stream, "log")
-							.contains("TICKTOCK CLOUD CONFIG - TIMESTAMP:"));
+			Awaitility.await("Source not started").until(
+					() -> stream.logs(app("time")).contains("Started TimeSource"));
+			Awaitility.await("Sink not started").until(
+					() -> stream.logs(app("log")).contains("Started LogSink"));
+			Awaitility.await("No output found").until(
+					() -> stream.logs(app("log")).contains("TICKTOCK CLOUD CONFIG - TIMESTAMP:"));
 		}
 	}
 
@@ -736,9 +739,9 @@ public class DataFlowIT {
 				.put("app.*.management.endpoints.web.exposure.include", "*")
 				.put("app.*.spring.cloud.streamapp.security.enabled", "false");
 
-		// TODO this misterious 80 port set for K8s comes from the ATs and i'm not sure why. But without it partition tests fail.
 		if (this.runtimeApps.getPlatformType().equalsIgnoreCase(RuntimeApplicationHelper.KUBERNETES_PLATFORM_TYPE)) {
 			propertiesBuilder.put("app.*.server.port", "80");
+			propertiesBuilder.put("deployer.*.kubernetes.createLoadBalancer", "true"); // requires LoadBalancer support on the platform
 		}
 
 		return propertiesBuilder.build();
@@ -768,6 +771,10 @@ public class DataFlowIT {
 		return new Condition<>(predicate, "");
 	}
 
+	private StreamApplication app(String appName) {
+		return new StreamApplication(appName);
+	}
+
 	// -----------------------------------------------------------------------
 	//                               TASK TESTS
 	// -----------------------------------------------------------------------
@@ -778,17 +785,18 @@ public class DataFlowIT {
 	public void timestampTask() {
 		logger.info("task-timestamp-test");
 
-		try (Task task = tasks.builder()
+		try (Task task = Task.builder(dataFlowOperations)
 				.name(randomTaskName())
 				.definition("timestamp")
 				.description("Test timestamp task")
-				.create()) {
+				.build()) {
 
 			// task first launch
 			long launchId1 = task.launch();
 
 			Awaitility.await().until(() -> task.executionStatus(launchId1) == TaskExecutionStatus.COMPLETE);
 			assertThat(task.executions().size()).isEqualTo(1);
+			assertThat(task.execution(launchId1).isPresent()).isTrue();
 			assertThat(task.execution(launchId1).get().getExitCode()).isEqualTo(EXIT_CODE_SUCCESS);
 
 			// task second launch
@@ -796,6 +804,7 @@ public class DataFlowIT {
 
 			Awaitility.await().until(() -> task.executionStatus(launchId2) == TaskExecutionStatus.COMPLETE);
 			assertThat(task.executions().size()).isEqualTo(2);
+			assertThat(task.execution(launchId2).isPresent()).isTrue();
 			assertThat(task.execution(launchId2).get().getExitCode()).isEqualTo(EXIT_CODE_SUCCESS);
 
 			// All
@@ -807,13 +816,15 @@ public class DataFlowIT {
 	public void composedTask() {
 		logger.info("task-composed-task-runner-test");
 
-		try (Task task = tasks.builder()
+		TaskBuilder taskBuilder = Task.builder(dataFlowOperations);
+
+		try (Task task = taskBuilder
 				.name(randomTaskName())
 				.definition("a: timestamp && b:timestamp")
 				.description("Test composedTask")
-				.create()) {
+				.build()) {
 
-			assertThat(task.children().size()).isEqualTo(2);
+			assertThat(task.composedTaskChildTasks().size()).isEqualTo(2);
 
 			// first launch
 
@@ -825,7 +836,7 @@ public class DataFlowIT {
 			assertThat(task.executionStatus(launchId1)).isEqualTo(TaskExecutionStatus.COMPLETE);
 			assertThat(task.execution(launchId1).get().getExitCode()).isEqualTo(EXIT_CODE_SUCCESS);
 
-			task.children().forEach(childTask -> {
+			task.composedTaskChildTasks().forEach(childTask -> {
 				assertThat(childTask.executions().size()).isEqualTo(1);
 				assertThat(childTask.executionByParentExecutionId(launchId1).get().getExitCode()).isEqualTo(EXIT_CODE_SUCCESS);
 			});
@@ -835,33 +846,34 @@ public class DataFlowIT {
 			// second launch
 			long launchId2 = task.launch();
 
-			Awaitility.await().until(() -> task.executionStatus(launchId2) == TaskExecutionStatus.ERROR);
+			Awaitility.await().until(() -> task.executionStatus(launchId2) == TaskExecutionStatus.COMPLETE);
 
 			assertThat(task.executions().size()).isEqualTo(2);
-			assertThat(task.executionStatus(launchId2)).isEqualTo(TaskExecutionStatus.ERROR);
-			assertThat(task.execution(launchId2).get().getExitCode()).isEqualTo(EXIT_CODE_ERROR);
+			assertThat(task.executionStatus(launchId2)).isEqualTo(TaskExecutionStatus.COMPLETE);
+			assertThat(task.execution(launchId2).get().getExitCode()).isEqualTo(EXIT_CODE_SUCCESS);
 
-			task.children().forEach(childTask -> {
-				assertThat(childTask.executions().size()).isEqualTo(1);
-				assertThat(childTask.executionByParentExecutionId(launchId2).isPresent()).isFalse();
+			task.composedTaskChildTasks().forEach(childTask -> {
+				assertThat(childTask.executions().size()).isEqualTo(2);
+				assertThat(childTask.executionByParentExecutionId(launchId2).get().getExitCode()).isEqualTo(EXIT_CODE_SUCCESS);
 			});
 
-			assertThat(tasks.list().size()).isEqualTo(3);
+			assertThat(taskBuilder.allTasks().size()).isEqualTo(3);
 		}
-		assertThat(tasks.list().size()).isEqualTo(0);
+		assertThat(taskBuilder.allTasks().size()).isEqualTo(0);
 	}
 
 	@Test
 	public void multipleComposedTaskWithArguments() {
 		logger.info("task-multiple-composed-task-with-arguments-test");
 
-		try (Task task = tasks.builder()
+		TaskBuilder taskBuilder = Task.builder(dataFlowOperations);
+		try (Task task = taskBuilder
 				.name(randomTaskName())
 				.definition("a: timestamp && b:timestamp")
 				.description("Test multipleComposedTaskhWithArguments")
-				.create()) {
+				.build()) {
 
-			assertThat(task.children().size()).isEqualTo(2);
+			assertThat(task.composedTaskChildTasks().size()).isEqualTo(2);
 
 			// first launch
 			List<String> arguments = Arrays.asList("--increment-instance-enabled=true");
@@ -873,7 +885,7 @@ public class DataFlowIT {
 			assertThat(task.executionStatus(launchId1)).isEqualTo(TaskExecutionStatus.COMPLETE);
 			assertThat(task.execution(launchId1).get().getExitCode()).isEqualTo(EXIT_CODE_SUCCESS);
 
-			task.children().forEach(childTask -> {
+			task.composedTaskChildTasks().forEach(childTask -> {
 				assertThat(childTask.executions().size()).isEqualTo(1);
 				assertThat(childTask.executionByParentExecutionId(launchId1).get().getExitCode()).isEqualTo(EXIT_CODE_SUCCESS);
 			});
@@ -889,16 +901,16 @@ public class DataFlowIT {
 			assertThat(task.executionStatus(launchId2)).isEqualTo(TaskExecutionStatus.COMPLETE);
 			assertThat(task.execution(launchId2).get().getExitCode()).isEqualTo(EXIT_CODE_SUCCESS);
 
-			task.children().forEach(childTask -> {
+			task.composedTaskChildTasks().forEach(childTask -> {
 				assertThat(childTask.executions().size()).isEqualTo(2);
 				assertThat(childTask.executionByParentExecutionId(launchId2).get().getExitCode()).isEqualTo(EXIT_CODE_SUCCESS);
 			});
 
 			assertThat(task.jobExecutionResources().size()).isEqualTo(2);
 
-			assertThat(tasks.list().size()).isEqualTo(3);
+			assertThat(taskBuilder.allTasks().size()).isEqualTo(3);
 		}
-		assertThat(tasks.list().size()).isEqualTo(0);
+		assertThat(taskBuilder.allTasks().size()).isEqualTo(0);
 	}
 
 	private static String randomTaskName() {

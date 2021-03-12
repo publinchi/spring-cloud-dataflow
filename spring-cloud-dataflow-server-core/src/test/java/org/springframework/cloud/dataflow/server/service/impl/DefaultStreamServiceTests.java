@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2018 the original author or authors.
+ * Copyright 2017-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,6 +39,7 @@ import org.springframework.cloud.dataflow.configuration.metadata.container.Conta
 import org.springframework.cloud.dataflow.core.ApplicationType;
 import org.springframework.cloud.dataflow.core.AuditActionType;
 import org.springframework.cloud.dataflow.core.AuditOperationType;
+import org.springframework.cloud.dataflow.core.DefaultStreamDefinitionService;
 import org.springframework.cloud.dataflow.core.StreamDefinition;
 import org.springframework.cloud.dataflow.core.StreamDeployment;
 import org.springframework.cloud.dataflow.registry.service.AppRegistryService;
@@ -73,6 +74,7 @@ import static org.mockito.Mockito.when;
  * @author Eric Bottard
  * @author Christian Tzolov
  * @author Gunnar Hillert
+ * @author Chris Schaefer
  */
 @RunWith(SpringRunner.class)
 public class DefaultStreamServiceTests {
@@ -106,11 +108,12 @@ public class DefaultStreamServiceTests {
 		this.auditRecordService = mock(AuditRecordService.class); // FIXME
 		this.appDeploymentRequestCreator = new AppDeploymentRequestCreator(this.appRegistryService,
 				mock(CommonApplicationProperties.class),
-				new BootApplicationConfigurationMetadataResolver(mock(ContainerImageMetadataResolver.class)));
+				new BootApplicationConfigurationMetadataResolver(mock(ContainerImageMetadataResolver.class)),
+				new DefaultStreamDefinitionService());
 		this.streamValidationService = mock(DefaultStreamValidationService.class);
 		this.defaultStreamService = new DefaultStreamService(streamDefinitionRepository,
 				this.skipperStreamDeployer, this.appDeploymentRequestCreator, this.streamValidationService,
-				this.auditRecordService);
+				this.auditRecordService, new DefaultStreamDefinitionService());
 		when(streamDefinitionRepository.findById("test2")).thenReturn(Optional.of(streamDefinition2));
 	}
 
@@ -282,6 +285,28 @@ public class DefaultStreamServiceTests {
 				argumentCaptor.getValue().getStreamDeployerProperties().get(SkipperStream.SKIPPER_PACKAGE_VERSION));
 	}
 
+	@Test
+	public void testInvalidStreamName() {
+		when(this.streamValidationService.isRegistered("time", ApplicationType.source)).thenReturn(true);
+		when(this.streamValidationService.isRegistered("log", ApplicationType.sink)).thenReturn(true);
+
+		String[] streamNames = { "$stream", "stream$", "st_ream" };
+
+		for (String streamName : streamNames) {
+			try {
+				final StreamDefinition expectedStreamDefinition = new StreamDefinition(streamName, "time | log");
+				when(streamDefinitionRepository.save(expectedStreamDefinition)).thenReturn(expectedStreamDefinition);
+
+				this.defaultStreamService.createStream(streamName, "time | log", "demo stream", false);
+			} catch (Exception e) {
+				Assert.assertTrue(e instanceof InvalidStreamDefinitionException);
+				Assert.assertEquals(e.getMessage(), "Stream name must consist of alphanumeric characters or '-', " +
+						"start with an alphabetic character, and end with an alphanumeric character (e.g. 'my-name', " +
+						"or 'abc-123')");
+			}
+		}
+	}
+
 	public ArgumentCaptor<StreamDeploymentRequest> testStreamDeploy(Map<String, String> deploymentProperties) {
 		appDeploymentRequestCreator = mock(AppDeploymentRequestCreator.class);
 		skipperStreamDeployer = mock(SkipperStreamDeployer.class);
@@ -289,14 +314,14 @@ public class DefaultStreamServiceTests {
 
 		this.defaultStreamService = new DefaultStreamService(streamDefinitionRepository,
 				this.skipperStreamDeployer, this.appDeploymentRequestCreator,
-				this.streamValidationService, this.auditRecordService);
+				this.streamValidationService, this.auditRecordService, new DefaultStreamDefinitionService());
 
 		StreamDefinition streamDefinition = new StreamDefinition("test1", "time | log");
 
 		when(streamDefinitionRepository.findById(streamDefinition.getName())).thenReturn(Optional.of(streamDefinition));
 
 		List<AppDeploymentRequest> appDeploymentRequests = Arrays.asList(mock(AppDeploymentRequest.class));
-		when(appDeploymentRequestCreator.createRequests(streamDefinition, new HashMap<>()))
+		when(appDeploymentRequestCreator.createRequests(streamDefinition, new HashMap<>(), "default"))
 				.thenReturn(appDeploymentRequests);
 
 		this.defaultStreamService.deployStream(streamDefinition1.getName(), deploymentProperties);

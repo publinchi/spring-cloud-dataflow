@@ -94,6 +94,14 @@ public interface TaskOperations {
 	void destroy(String name);
 
 	/**
+	 * Destroy an existing task with the flag to cleanup task resources.
+	 *
+	 * @param name the name of the task
+	 * @param cleanup flag indicates task execution cleanup
+	 */
+	void destroy(String name, boolean cleanup);
+
+	/**
 	 * @return the list task executions known to the system.
 	 */
 	PagedModel<TaskExecutionResource> executionList();
@@ -144,6 +152,14 @@ public interface TaskOperations {
 	 * @param id identifier of the task execution
 	 */
 	void cleanup(long id);
+
+	/**
+	 * Cleanup any resources associated with the execution for the id specified.
+	 *
+	 * @param id identifier of the task execution
+	 * @param removeData delete the history of the execution
+	 */
+	void cleanup(long id, boolean removeData);
 
 	/**
 	 * Return the validation status for the tasks in an definition.

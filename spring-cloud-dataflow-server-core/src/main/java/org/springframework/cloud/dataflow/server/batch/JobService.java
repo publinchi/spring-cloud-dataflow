@@ -16,6 +16,7 @@
 package org.springframework.cloud.dataflow.server.batch;
 
 import java.util.Collection;
+import java.util.Date;
 
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.Job;
@@ -349,4 +350,39 @@ public interface JobService {
 	 */
 	Collection<JobExecution> listJobExecutionsForJob(String jobName, BatchStatus status, int pageOffset, int pageSize)
 			throws NoSuchJobException;
+
+	/**
+	 * List the {@link JobExecutionWithStepCount job executions} filtered by date range in
+	 * descending order of creation (usually close to execution order).
+	 *
+	 * @param fromDate the date which start date must be greater than.
+	 * @param toDate   the date which start date must be less than.
+	 * @param start    the start index of the first job execution
+	 * @param count    the maximum number of executions to return
+	 * @return a collection of {@link JobExecutionWithStepCount}
+	 */
+	Collection<JobExecutionWithStepCount> listJobExecutionsForJobWithStepCount(Date fromDate,
+			Date toDate, int start, int count);
+
+	/**
+	 * List the {@link JobExecutionWithStepCount job executions} filtered by job instance id in
+	 * descending order of creation (usually close to execution order).
+	 *
+	 * @param jobInstanceId the job instance id associated with the execution.
+	 * @param start    the start index of the first job execution
+	 * @param count    the maximum number of executions to return
+	 * @return a collection of {@link JobExecutionWithStepCount}
+	 */
+	Collection<JobExecutionWithStepCount> listJobExecutionsForJobWithStepCountFilteredByJobInstanceId(int jobInstanceId, int start, int count);
+
+	/**
+	 * List the {@link JobExecutionWithStepCount job executions} filtered by task execution id in
+	 * descending order of creation (usually close to execution order).
+	 *
+	 * @param taskExecutionId the task execution id associated with the execution.
+	 * @param start    the start index of the first job execution
+	 * @param count    the maximum number of executions to return
+	 * @return a collection of {@link JobExecutionWithStepCount}
+	 */
+	Collection<JobExecutionWithStepCount> listJobExecutionsForJobWithStepCountFilteredByTaskExecutionId(int taskExecutionId, int start, int count);
 }

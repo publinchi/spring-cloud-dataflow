@@ -16,30 +16,34 @@
 
 package org.springframework.cloud.dataflow.server.service.impl;
 
-import javax.validation.constraints.NotBlank;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.cloud.dataflow.core.DataFlowPropertyKeys;
+import org.springframework.util.StringUtils;
 import org.springframework.validation.annotation.Validated;
-
 
 /**
  * Properties used to define the behavior of tasks created by Spring Cloud Data Flow.
  *
  * @author Glenn Renfro
  * @author David Turanski
+ * @author Chris Schaefer
  */
 @Validated
-@ConfigurationProperties(prefix = TaskConfigurationProperties.COMPOSED_TASK_PREFIX)
+@ConfigurationProperties(prefix = TaskConfigurationProperties.TASK_PREFIX)
 public class TaskConfigurationProperties {
+	private static final Logger LOGGER = LoggerFactory.getLogger(TaskConfigurationProperties.class);
 
-	public static final String COMPOSED_TASK_PREFIX = DataFlowPropertyKeys.PREFIX + "task";
+	public static final String TASK_PREFIX = DataFlowPropertyKeys.PREFIX + "task";
 
-	/**
-	 * The task application name to be used for the composed task runner.
-	 */
-	@NotBlank
-	private String composedTaskRunnerName = "composed-task-runner";
+	@Deprecated
+	public static final String COMPOSED_TASK_RUNNER_NAME = "composed-task-runner";
+
+	@Autowired
+	private ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties;
 
 	/**
 	 * Whether the server should auto create task definitions if one does not exist for a launch request and
@@ -52,12 +56,25 @@ public class TaskConfigurationProperties {
 	 */
 	private DeployerProperties deployerProperties = new DeployerProperties();
 
-	public String getComposedTaskRunnerName() {
-		return composedTaskRunnerName;
+	/**
+	 * When using the kubernetes platform obtain database username and password
+	 * from secrets vs having dataflow pass them via properties.
+	 */
+	private boolean useKubernetesSecretsForDbCredentials;
+
+	@Deprecated
+	public String getComposedTaskRunnerUri() {
+		logDeprecationWarning("getUri");
+		return this.composedTaskRunnerConfigurationProperties.getUri();
 	}
 
-	public void setComposedTaskRunnerName(String taskName) {
-		this.composedTaskRunnerName = taskName;
+	@Deprecated
+	public void setComposedTaskRunnerUri(String composedTaskRunnerUri) {
+		logDeprecationWarning("setUri");
+
+		if (!StringUtils.hasText(this.composedTaskRunnerConfigurationProperties.getUri())) {
+			this.composedTaskRunnerConfigurationProperties.setUri(composedTaskRunnerUri);
+		}
 	}
 
 	public DeployerProperties getDeployerProperties() {
@@ -74,6 +91,23 @@ public class TaskConfigurationProperties {
 
 	public void setAutoCreateTaskDefinitions(boolean autoCreateTaskDefinitions) {
 		this.autoCreateTaskDefinitions = autoCreateTaskDefinitions;
+	}
+
+	@Deprecated
+	public boolean isUseUserAccessToken() {
+		logDeprecationWarning();
+
+		return this.composedTaskRunnerConfigurationProperties.isUseUserAccessToken() == null ? false :
+				this.composedTaskRunnerConfigurationProperties.isUseUserAccessToken();
+	}
+
+	@Deprecated
+	public void setUseUserAccessToken(boolean useUserAccessToken) {
+		logDeprecationWarning();
+
+		if (this.composedTaskRunnerConfigurationProperties.isUseUserAccessToken() == null) {
+			this.composedTaskRunnerConfigurationProperties.setUseUserAccessToken(useUserAccessToken);
+		}
 	}
 
 	public static class DeployerProperties {
@@ -113,6 +147,32 @@ public class TaskConfigurationProperties {
 
 		public void setGroupExcludes(String[] groupExcludes) {
 			this.groupExcludes = groupExcludes;
+		}
+	}
+
+	public boolean isUseKubernetesSecretsForDbCredentials() {
+		return useKubernetesSecretsForDbCredentials;
+	}
+
+	public void setUseKubernetesSecretsForDbCredentials(boolean useKubernetesSecretsForDbCredentials) {
+		this.useKubernetesSecretsForDbCredentials = useKubernetesSecretsForDbCredentials;
+	}
+
+	private void logDeprecationWarning() {
+		logDeprecationWarning(null);
+	}
+
+	private void logDeprecationWarning(String newMethodName) {
+		String callingMethodName = Thread.currentThread().getStackTrace()[2].getMethodName();
+		LOGGER.warn(this.getClass().getName() + "." + callingMethodName
+				+ " is deprecated. Please use " + ComposedTaskRunnerConfigurationProperties.class.getName() + "."
+				+ (newMethodName != null ? newMethodName : callingMethodName));
+	}
+
+	void setComposedTaskRunnerConfigurationProperties(ComposedTaskRunnerConfigurationProperties
+							composedTaskRunnerConfigurationProperties) {
+		if (composedTaskRunnerConfigurationProperties != null) {
+			this.composedTaskRunnerConfigurationProperties = composedTaskRunnerConfigurationProperties;
 		}
 	}
 }

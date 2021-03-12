@@ -1,4 +1,24 @@
 management:
+  metrics:
+    tags:
+      application: ${info.app.name}
+      application.version: ${info.app.version}
+      service: "scdf server"
+    web:
+      server:
+        request:
+          autotime:
+            enabled: true # true is default to Boot 2.3.2 at least.
+            percentiles-histogram: true
+    export:
+      influx:
+        enabled: false
+      prometheus:
+        enabled: false
+        rsocket:
+          enabled: false
+      wavefront:
+        enabled: false
   endpoints:
     web:
       base-path: /management
@@ -25,11 +45,14 @@ spring:
     initialize-schema: never
   jpa:
     properties:
-      hibernate.id.new_generator_mappings: true
+      hibernate:
+        id.new_generator_mappings: true
+        # Statistics generation is required for publishing JPA micrometer metrics.
+        # generate_statistics: true
     hibernate:
-        naming:
-          physical-strategy: org.springframework.boot.orm.jpa.hibernate.SpringPhysicalNamingStrategy
-          implicit-strategy: org.springframework.boot.orm.jpa.hibernate.SpringImplicitNamingStrategy
+      naming:
+        physical-strategy: org.springframework.boot.orm.jpa.hibernate.SpringPhysicalNamingStrategy
+        implicit-strategy: org.springframework.boot.orm.jpa.hibernate.SpringImplicitNamingStrategy
   flyway:
     enabled: true
     baselineVersion: 1
@@ -48,6 +71,13 @@ spring:
       rdbms:
         initialize:
           enable: false
+      container:
+        registry-configurations:
+          default:
+            registry-host: registry-1.docker.io
+            authorization-type: dockeroauth2
+            extra:
+              "registryAuthUri": 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repository}:pull&offline_token=1&client_id=shell'
       version-info:
         dependency-fetch:
           enabled: false
@@ -68,7 +98,7 @@ spring:
             checksum-sha1-url: "{repository}/org/springframework/cloud/spring-cloud-dataflow-shell/{version}/spring-cloud-dataflow-shell-{version}.jar.sha1"
             checksum-sha256-url: "{repository}/org/springframework/cloud/spring-cloud-dataflow-shell/{version}/spring-cloud-dataflow-shell-{version}.jar.sha256"
       task:
-        scheduler-task-launcher-url: "maven://org.springframework.cloud:spring-cloud-dataflow-scheduler-task-launcher:@project.version@"
+        composed-task-runner-uri: "maven://org.springframework.cloud:spring-cloud-dataflow-composed-task-runner:@project.version@"
         deployer-properties:
           group-excludes:
             - spring.cloud.deployer.kubernetes.fabric8
@@ -86,7 +116,7 @@ spring:
         authorization:
           enabled: true
           loginUrl: "/"
-          permit-all-paths: "/management/health,/authenticate,/security/info,/assets/**,/dashboard/logout-success-oauth.html,/favicon.ico"
+          permit-all-paths: "/management/health,/management/info,/authenticate,/security/info,/assets/**,/dashboard/logout-success-oauth.html,/favicon.ico"
           rules:
             # About
 
@@ -138,6 +168,7 @@ spring:
             - GET    /streams/definitions            => hasRole('ROLE_VIEW')
             - GET    /streams/definitions/*          => hasRole('ROLE_VIEW')
             - GET    /streams/definitions/*/related  => hasRole('ROLE_VIEW')
+            - GET    /streams/definitions/*/applications  => hasRole('ROLE_VIEW')
             - POST   /streams/definitions            => hasRole('ROLE_CREATE')
             - DELETE /streams/definitions/*          => hasRole('ROLE_DESTROY')
             - DELETE /streams/definitions            => hasRole('ROLE_DESTROY')
@@ -161,6 +192,7 @@ spring:
 
             - POST   /tasks/definitions              => hasRole('ROLE_CREATE')
             - DELETE /tasks/definitions/*            => hasRole('ROLE_DESTROY')
+            - DELETE /tasks/definitions              => hasRole('ROLE_DESTROY')
             - GET    /tasks/definitions              => hasRole('ROLE_VIEW')
             - GET    /tasks/definitions/*            => hasRole('ROLE_VIEW')
 
@@ -171,6 +203,7 @@ spring:
             - POST   /tasks/executions               => hasRole('ROLE_DEPLOY')
             - POST   /tasks/executions/*             => hasRole('ROLE_DEPLOY')
             - DELETE /tasks/executions/*             => hasRole('ROLE_DESTROY')
+            - DELETE /tasks/executions               => hasRole('ROLE_DESTROY')
 
             # Task Schedules
 
@@ -180,6 +213,7 @@ spring:
             - GET    /tasks/schedules/instances/*    => hasRole('ROLE_VIEW')
             - POST   /tasks/schedules                => hasRole('ROLE_SCHEDULE')
             - DELETE /tasks/schedules/*              => hasRole('ROLE_SCHEDULE')
+            - DELETE /tasks/schedules                => hasRole('ROLE_SCHEDULE')
 
             # Task Platform Account List */
 
@@ -196,10 +230,3 @@ spring:
             # Tools
 
             - POST   /tools/**                       => hasRole('ROLE_VIEW')
-      container:
-        registry-configurations:
-          default:
-            registry-host: registry-1.docker.io
-            authorization-type: dockeroauth2
-            extra:
-              "registryAuthUri": 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repository}:pull&offline_token=1&client_id=shell'

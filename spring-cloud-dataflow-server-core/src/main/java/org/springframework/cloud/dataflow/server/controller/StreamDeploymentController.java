@@ -24,11 +24,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.cloud.dataflow.core.StreamDefinition;
+import org.springframework.cloud.dataflow.core.StreamDefinitionService;
 import org.springframework.cloud.dataflow.core.StreamDeployment;
 import org.springframework.cloud.dataflow.rest.UpdateStreamRequest;
 import org.springframework.cloud.dataflow.rest.resource.DeploymentStateResource;
 import org.springframework.cloud.dataflow.rest.resource.StreamDeploymentResource;
-import org.springframework.cloud.dataflow.rest.util.ArgumentSanitizer;
 import org.springframework.cloud.dataflow.server.controller.support.ControllerUtils;
 import org.springframework.cloud.dataflow.server.repository.NoSuchStreamDefinitionException;
 import org.springframework.cloud.dataflow.server.repository.StreamDefinitionRepository;
@@ -46,6 +46,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -72,6 +73,8 @@ public class StreamDeploymentController {
 
 	private final StreamService streamService;
 
+	private final StreamDefinitionService streamDefinitionService;
+
 	/**
 	 * The repository this controller will use for stream CRUD operations.
 	 */
@@ -85,13 +88,16 @@ public class StreamDeploymentController {
 	 * @param streamService the underlying UpdatableStreamService to deploy the stream
 	 */
 	public StreamDeploymentController(StreamDefinitionRepository repository,
-			StreamService streamService) {
+			StreamService streamService,
+			StreamDefinitionService streamDefinitionService) {
 
 		Assert.notNull(repository, "StreamDefinitionRepository must not be null");
 		Assert.notNull(streamService, "StreamService must not be null");
+		Assert.notNull(streamDefinitionService, "StreamDefinitionService must not be null");
 
 		this.repository = repository;
 		this.streamService = streamService;
+		this.streamDefinitionService = streamDefinitionService;
 	}
 
 	/**
@@ -177,8 +183,9 @@ public class StreamDeploymentController {
 	 * @return The stream deployment
 	 */
 	@RequestMapping(value = "/{name}", method = RequestMethod.GET)
-	@ResponseStatus(HttpStatus.CREATED)
-	public StreamDeploymentResource info(@PathVariable("name") String name) {
+	@ResponseStatus(HttpStatus.OK)
+	public StreamDeploymentResource info(@PathVariable("name") String name,
+			@RequestParam(value = "reuse-deployment-properties", required = false) boolean reuseDeploymentProperties) {
 		StreamDefinition streamDefinition = this.repository.findById(name)
 				.orElseThrow(() -> new NoSuchStreamDefinitionException(name));
 		StreamDeployment streamDeployment = this.streamService.info(name);
@@ -190,7 +197,7 @@ public class StreamDeploymentController {
 			final DeploymentStateResource deploymentStateResource = ControllerUtils.mapState(deploymentState);
 			status = deploymentStateResource.getKey();
 		}
-		return new Assembler(streamDefinition.getDslText(), streamDefinition.getDescription(), status)
+		return new Assembler(streamDefinition.getDslText(), streamDefinition.getDescription(), status, reuseDeploymentProperties)
 				.toModel(streamDeployment);
 	}
 
@@ -209,7 +216,7 @@ public class StreamDeploymentController {
 	}
 
 	/**
-	 * {@link org.springframework.hateoas.server.ResourceAssembler} implementation that
+	 * {@link org.springframework.hateoas.server.RepresentationModelAssembler} implementation that
 	 * converts {@link StreamDeployment}s to {@link StreamDeploymentResource}s.
 	 */
 	class Assembler extends RepresentationModelAssemblerSupport<StreamDeployment, StreamDeploymentResource> {
@@ -220,11 +227,14 @@ public class StreamDeploymentController {
 
 		private final String description;
 
-		public Assembler(String dslText, String description, String status) {
+		private boolean reuseDeploymentProperties;
+
+		public Assembler(String dslText, String description, String status, boolean reuseDeploymentProperties) {
 			super(StreamDeploymentController.class, StreamDeploymentResource.class);
 			this.dslText = dslText;
 			this.description = description;
 			this.status = status;
+			this.reuseDeploymentProperties = reuseDeploymentProperties;
 		}
 
 		@Override
@@ -241,12 +251,12 @@ public class StreamDeploymentController {
 		@Override
 		public StreamDeploymentResource instantiateModel(StreamDeployment streamDeployment) {
 			String deploymentProperties = "";
-			if (StringUtils.hasText(streamDeployment.getDeploymentProperties()) && canDisplayDeploymentProperties()) {
+			if (this.reuseDeploymentProperties ||
+					(StringUtils.hasText(streamDeployment.getDeploymentProperties()) && canDisplayDeploymentProperties())) {
 				deploymentProperties = streamDeployment.getDeploymentProperties();
 			}
-			return new StreamDeploymentResource(streamDeployment.getStreamName(),
-					new ArgumentSanitizer().sanitizeStream(
-							new StreamDefinition(streamDeployment.getStreamName(), this.dslText)),
+				return new StreamDeploymentResource(streamDeployment.getStreamName(),
+					streamDefinitionService.redactDsl(new StreamDefinition(streamDeployment.getStreamName(), this.dslText)),
 					this.description,
 					deploymentProperties, this.status);
 		}

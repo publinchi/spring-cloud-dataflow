@@ -19,6 +19,7 @@ package org.springframework.cloud.dataflow.server.service.impl;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,6 +56,7 @@ import org.springframework.cloud.dataflow.server.repository.TaskDefinitionReposi
 import org.springframework.cloud.dataflow.server.service.SchedulerService;
 import org.springframework.cloud.dataflow.server.service.SchedulerServiceProperties;
 import org.springframework.cloud.deployer.resource.docker.DockerResource;
+import org.springframework.cloud.deployer.spi.core.AppDefinition;
 import org.springframework.cloud.deployer.spi.scheduler.CreateScheduleException;
 import org.springframework.cloud.deployer.spi.scheduler.ScheduleInfo;
 import org.springframework.cloud.deployer.spi.scheduler.ScheduleRequest;
@@ -83,7 +85,8 @@ import static org.mockito.Mockito.when;
 		"spring.main.allow-bean-definition-overriding=true",
 		"spring.cloud.dataflow.task.scheduler-task-launcher-url=https://test.test",
 		"spring.cloud.dataflow.features.schedules-enabled=true"})
-@EnableConfigurationProperties({ CommonApplicationProperties.class, TaskConfigurationProperties.class, DockerValidatorProperties.class})
+@EnableConfigurationProperties({ CommonApplicationProperties.class, TaskConfigurationProperties.class,
+		DockerValidatorProperties.class, ComposedTaskRunnerConfigurationProperties.class})
 @DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_EACH_TEST_METHOD)
 @AutoConfigureTestDatabase(replace = Replace.ANY)
 public class DefaultSchedulerServiceTests {
@@ -115,6 +118,9 @@ public class DefaultSchedulerServiceTests {
 
 	@Autowired
 	private TaskConfigurationProperties taskConfigurationProperties;
+
+	@Autowired
+	private ComposedTaskRunnerConfigurationProperties composedTaskRunnerConfigurationProperties;
 
 	@Autowired
 	private CommonApplicationProperties commonApplicationProperties;
@@ -170,7 +176,7 @@ public class DefaultSchedulerServiceTests {
 	public void testScheduleWithLongNameOnKuberenetesPlatform() {
 		getMockedKubernetesSchedulerService().schedule(BASE_SCHEDULE_NAME +
 				"1234567789012345612345678901234567890123", BASE_DEFINITION_NAME, this.testProperties,
-				this.commandLineArgs);
+				this.commandLineArgs, null);
 	}
 
 	@Test
@@ -186,13 +192,14 @@ public class DefaultSchedulerServiceTests {
 		Launcher launcher = new Launcher("default", "Kubernetes", Mockito.mock(TaskLauncher.class), scheduler);
 		List<Launcher> launchers = new ArrayList<>();
 		launchers.add(launcher);
-		TaskPlatform taskPlatform = new TaskPlatform("testTaskPlatform", launchers);
+		List<TaskPlatform> taskPlatform = Collections.singletonList(new TaskPlatform("testTaskPlatform", launchers));
 
-		return  new DefaultSchedulerService(this.commonApplicationProperties,
+		return new DefaultSchedulerService(this.commonApplicationProperties,
 				taskPlatform, this.taskDefinitionRepository,
 				this.appRegistry, this.resourceLoader,
 				this.taskConfigurationProperties, mock(DataSourceProperties.class), null,
-				this.metaDataResolver, this.schedulerServiceProperties, this.auditRecordService);
+				this.metaDataResolver, this.schedulerServiceProperties, this.auditRecordService,
+				this.composedTaskRunnerConfigurationProperties);
 	}
 
 	public void testScheduleWithLongName(){
@@ -289,6 +296,24 @@ public class DefaultSchedulerServiceTests {
 	}
 
 	@Test
+	public void testGetSchedule(){
+		schedulerService.schedule(BASE_SCHEDULE_NAME + 1,
+				BASE_DEFINITION_NAME, this.testProperties, this.commandLineArgs);
+		schedulerService.schedule(BASE_SCHEDULE_NAME + 2,
+				BASE_DEFINITION_NAME, this.testProperties, this.commandLineArgs);
+		schedulerService.schedule(BASE_SCHEDULE_NAME + 3,
+				BASE_DEFINITION_NAME, this.testProperties, this.commandLineArgs);
+
+		ScheduleInfo schedule = schedulerService.getSchedule(BASE_SCHEDULE_NAME + 1);
+		verifyScheduleExistsInScheduler(schedule);
+		schedule = schedulerService.getSchedule(BASE_SCHEDULE_NAME + 2);
+		verifyScheduleExistsInScheduler(schedule);
+		schedule = schedulerService.getSchedule(BASE_SCHEDULE_NAME + 3);
+		verifyScheduleExistsInScheduler(schedule);
+	}
+
+
+	@Test
 	public void testListMaxEntry() {
 		final int MAX_COUNT = 500;
 		schedulerServiceProperties.setMaxSchedulesReturned(MAX_COUNT);
@@ -328,7 +353,7 @@ public class DefaultSchedulerServiceTests {
 	@Test
 	public void testEmptyList() {
 		taskDefinitionRepository.save(new TaskDefinition(BASE_DEFINITION_NAME + 1, "demo"));
-		List<ScheduleInfo> schedules = schedulerService.list(BASE_DEFINITION_NAME + 1);
+		List<ScheduleInfo> schedules = schedulerService.list(BASE_DEFINITION_NAME + 1, "testTaskPlatform");
 		assertThat(schedules.size()).isEqualTo(0);
 		schedules = schedulerService.list();
 		assertThat(schedules.size()).isEqualTo(0);
@@ -352,7 +377,18 @@ public class DefaultSchedulerServiceTests {
 		assertEquals("Invalid number of command line arguments", 0, commandLineArguments.size());
 	}
 
+	@Test
+	public void testGetDefaultCTR() {
+		ScheduleRequest request = getScheduleRequest(new ArrayList<>(), "springcloudtask/composed-task-runner:latest", "1: timestamp && 2: timestamp");
+		AppDefinition definition = request.getDefinition();
+		assertEquals("Docker Resource [docker:springcloudtask/composed-task-runner:latest]", request.getResource().toString());
+	}
+
 	private List<String> getCommandLineArguments(List<String> commandLineArguments) {
+		return getScheduleRequest(commandLineArguments,"springcloudtask/timestamp-task:latest", "timestamp").getCommandlineArguments();
+	}
+
+	private ScheduleRequest getScheduleRequest(List<String> commandLineArguments, String resourceToReturn, String definition) {
 		Scheduler mockScheduler = mock(SimpleTestScheduler.class);
 		TaskDefinitionRepository mockTaskDefinitionRepository = mock(TaskDefinitionRepository.class);
 		AppRegistryService mockAppRegistryService = mock(AppRegistryService.class);
@@ -360,26 +396,25 @@ public class DefaultSchedulerServiceTests {
 		Launcher launcher = new Launcher("default", "defaultType", null, mockScheduler);
 		List<Launcher> launchers = new ArrayList<>();
 		launchers.add(launcher);
-		TaskPlatform taskPlatform = new TaskPlatform("testTaskPlatform", launchers);
+		List<TaskPlatform> taskPlatform = Collections.singletonList(new TaskPlatform("testTaskPlatform", launchers));
 		SchedulerService mockSchedulerService = new DefaultSchedulerService(mock(CommonApplicationProperties.class),
 				taskPlatform, mockTaskDefinitionRepository, mockAppRegistryService, mock(ResourceLoader.class),
 				this.taskConfigurationProperties, mock(DataSourceProperties.class), "uri",
 				mock(ApplicationConfigurationMetadataResolver.class), mock(SchedulerServiceProperties.class),
-				mock(AuditRecordService.class));
+				mock(AuditRecordService.class), this.composedTaskRunnerConfigurationProperties);
 
-		TaskDefinition taskDefinition = new TaskDefinition(BASE_DEFINITION_NAME, "timestamp");
+		TaskDefinition taskDefinition = new TaskDefinition(BASE_DEFINITION_NAME, definition);
 
 		when(mockTaskDefinitionRepository.findById(BASE_DEFINITION_NAME)).thenReturn(Optional.of(taskDefinition));
-		when(mockAppRegistryService.getAppResource(any())).thenReturn(new DockerResource("springcloudtask/timestamp-task:latest"));
+		when(mockAppRegistryService.getAppResource(any())).thenReturn(new DockerResource(resourceToReturn));
 		when(mockAppRegistryService.find(taskDefinition.getRegisteredAppName(), ApplicationType.task))
 				.thenReturn(new AppRegistration());
 		mockSchedulerService.schedule(BASE_SCHEDULE_NAME, BASE_DEFINITION_NAME, this.testProperties,
-				commandLineArguments);
+				commandLineArguments, null);
 
 		ArgumentCaptor<ScheduleRequest> scheduleRequestArgumentCaptor = ArgumentCaptor.forClass(ScheduleRequest.class);
 		verify(mockScheduler).schedule(scheduleRequestArgumentCaptor.capture());
-
-		return scheduleRequestArgumentCaptor.getValue().getCommandlineArguments();
+		return scheduleRequestArgumentCaptor.getValue();
 	}
 
 	private void verifyScheduleExistsInScheduler(ScheduleInfo scheduleInfo) {
